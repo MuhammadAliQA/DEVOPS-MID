@@ -1,3 +1,4 @@
+
 name: TicketFlow CI
 
 on:
@@ -9,9 +10,10 @@ on:
 permissions:
   contents: read
 
+# Do not cancel a running CI job.
 concurrency:
-  group: ticketflow-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ticketflow-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
@@ -77,16 +79,13 @@ jobs:
           fi
 
       - name: Django system checks
-        run: |
-          python manage.py check
+        run: python manage.py check
 
       - name: Check migrations
-        run: |
-          python manage.py makemigrations --check --dry-run
+        run: python manage.py makemigrations --check --dry-run
 
       - name: Run backend tests
-        run: |
-          python manage.py test
+        run: python manage.py test
 
       - name: Run pip-audit
         continue-on-error: true
@@ -94,13 +93,11 @@ jobs:
           pip install pip-audit
           pip-audit
 
-      - name: Build Docker images
-        run: |
-          docker compose build
-
       - name: Prepare CI environment
-        run: |
-          cp .env.example .env
+        run: cp .env.example .env
+
+      - name: Build Docker images
+        run: docker compose build
 
       - name: Compose service integration
         env:
@@ -150,3 +147,4 @@ jobs:
             coverage/
           if-no-files-found: ignore
           retention-days: 7
+
