@@ -1,0 +1,78 @@
+name: Tested image and optional production deployment
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy after publishing (requires protected production approval)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - id: name
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: image
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.name.outputs.name }}:${{ github.sha }}
+          provenance: true
+          sbom: true
+      - id: ref
+        env:
+          IMAGE: ${{ steps.name.outputs.name }}@${{ steps.image.outputs.digest }}
+        run: |
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Tested release image: \`$IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
+  deploy:
+    if: inputs.deploy
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload release tooling and run explicit release
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          APP_HOST: ${{ vars.APP_HOST }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          IMAGE: ${{ needs.publish.outputs.image }}
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[a-zA-Z0-9_/-]+$ && "$DEPLOY_PATH" != / && "$DEPLOY_PATH" != *..* ]]
+          [[ "$APP_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          [[ "$IMAGE" =~ ^ghcr.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH/deploy'"
+          scp -o BatchMode=yes -o StrictHostKeyChecking=yes deploy/compose.production.yaml deploy/Caddyfile deploy/release.py deploy/restore_drill.py "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/deploy/"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && python3 deploy/release.py --image '$IMAGE' --verify-url 'https://$APP_HOST/health/ready/'"

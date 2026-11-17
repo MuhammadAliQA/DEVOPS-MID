@@ -1,0 +1,7 @@
+{% extends "admin/index.html" %}{% load ui %}
+{% block content %}
+<section class="control-intro"><div><span class="control-eyebrow">PLATFORM WORKSPACE</span><h1>Har bir tadbir — nazorat ostida.</h1><p>Afisha, inventar, bronlar va kirish nazorati. Ma’lumotlar bazadan olinadi.</p></div>{% if perms.booking.add_event %}<a class="control-action" href="{% url 'admin:booking_event_add' %}">+ Tadbir yaratish</a>{% endif %}</section>
+{% if control_cards %}<section class="control-metrics" aria-label="Platform ko‘rsatkichlari">{% for card in control_cards %}<a class="control-metric" href="{% url card.url %}"><span>{{ card.label }}</span><strong>{{ card.value|money }}</strong><small>{{ card.detail }} <span aria-hidden="true">↗</span></small></a>{% endfor %}</section>{% endif %}
+<div class="control-notice"><span class="control-status"></span><div><strong>Demo to‘lov muhiti</strong><p>To‘lov, chipta va audit yozuvlari bu panelda faqat o‘qiladi. Bronni bekor qilish va check-in maxsus Operations oqimida bajariladi.</p></div></div>
+{{ block.super }}
+{% endblock %}

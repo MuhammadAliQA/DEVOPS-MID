@@ -1,0 +1,33 @@
+.venv/
+node_modules/
+.tmp/
+__pycache__/
+*.py[cod]
+*.sqlite3
+.env
+.idea/
+staticfiles/
+.coverage
+*.dump
+uploads/
+.env.production
+deploy/.env.production
+backups/
+deploy/release-state.json
+deploy/.release.lock
+
+# Local credentials and environment variants; keep documented examples.
+.env.*
+!.env.example
+!.env.production.example
+.aws/
+.codex/
+.agents/
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+
+# Original design export is not required to build or run the application.
+design-reference/

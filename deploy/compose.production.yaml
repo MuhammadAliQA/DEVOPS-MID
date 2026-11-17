@@ -1,0 +1,119 @@
+name: ticketly
+x-env: &env
+  DEBUG: "0"
+  SECRET_KEY: ${SECRET_KEY:?Set a strong SECRET_KEY}
+  PAYMENT_SECRET: ${PAYMENT_SECRET:?Set PAYMENT_SECRET}
+  ALLOWED_HOSTS: ${APP_HOST:?Set APP_HOST},localhost,127.0.0.1
+  CSRF_TRUSTED_ORIGINS: https://${APP_HOST}
+  DB_HOST: db
+  DB_NAME: ticketflow
+  DB_USER: ticketflow
+  DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+  PAYMENT_URL: http://payment:8001
+  REDIS_URL: redis://cache:6379/0
+  SECURE_SSL_REDIRECT: "1"
+  TRUST_PROXY_HEADERS: "1"
+  HSTS_INCLUDE_SUBDOMAINS: "1"
+  HSTS_PRELOAD: "1"
+  AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-20}
+x-app: &app
+  image: ${APP_IMAGE:?Set a tested image digest}
+  environment: *env
+  init: true
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+  restart: unless-stopped
+services:
+  proxy:
+    image: caddy:2.10-alpine
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      APP_HOST: ${APP_HOST}
+      TLS_EMAIL: ${TLS_EMAIL:?Set TLS_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web: {condition: service_healthy}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ticketflow
+      POSTGRES_USER: ticketflow
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U ticketflow -d ticketflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  cache:
+    image: redis:7.4-alpine
+    command: [redis-server, --maxmemory, 128mb, --maxmemory-policy, noeviction]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+  migrate:
+    <<: *app
+    profiles: [release]
+    restart: "no"
+    command: [python, manage.py, bootstrap_platform]
+    depends_on:
+      db: {condition: service_healthy}
+  payment:
+    <<: *app
+    environment:
+      DEBUG: "0"
+      PAYMENT_SECRET: ${PAYMENT_SECRET}
+    command: [gunicorn, payment_service.wsgi:application, --bind, "0.0.0.0:8001", --workers, "2", --access-logfile, "-", --error-logfile, "-"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live/',timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+  web:
+    <<: *app
+    volumes: [uploaded_posters:/app/uploads]
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_healthy}
+      payment: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready/',timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 5
+  expiry-worker:
+    <<: *app
+    environment:
+      <<: *env
+      EXPIRY_HEARTBEAT: /tmp/expiry.heartbeat
+    command: [python, manage.py, expire_bookings, --loop]
+    depends_on:
+      db: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import os,time; assert time.time()-os.path.getmtime('/tmp/expiry.heartbeat') < 60"]
+      interval: 20s
+      timeout: 3s
+      start_period: 30s
+      retries: 3
+volumes:
+  postgres_data:
+  uploaded_posters:
+  caddy_data:
+  caddy_config:

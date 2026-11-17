@@ -1,0 +1,19 @@
+{% extends 'base.html' %}{% load ui %}
+{% block content %}
+<main class="page container">
+  <div class="page-heading"><span>{% t 'support' %}</span><h1>{% t section %}</h1></div>
+  <div class="support-layout">
+    <nav class="support-nav" aria-label="{% t 'support' %}">
+      <a href="{% url 'help' %}" {% if section == 'help' %}aria-current="page"{% endif %}>{% t 'help' %}</a>
+      <a href="{% url 'terms' %}" {% if section == 'terms' %}aria-current="page"{% endif %}>{% t 'terms' %}</a>
+      <a href="{% url 'privacy' %}" {% if section == 'privacy' %}aria-current="page"{% endif %}>{% t 'privacy' %}</a>
+    </nav>
+    <section class="prose">
+      {% if section == 'privacy' %}<p>{% t 'privacy_text' %}</p>
+      {% elif section == 'terms' %}<p>{% t 'terms_text' %}</p>
+      {% else %}<h2>{% t 'help_heading' %}</h2><p>{% t 'help_text' %}</p><h2>{% t 'help_account' %}</h2><p>{% t 'help_account_text' %}</p>{% endif %}
+      <a class="primary" href="{% url 'events' %}">{% t 'events' %}{% icon 'arrow' %}</a>
+    </section>
+  </div>
+</main>
+{% endblock %}

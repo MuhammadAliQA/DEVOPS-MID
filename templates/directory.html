@@ -1,0 +1,18 @@
+{% extends 'base.html' %}{% load ui %}
+{% block content %}
+<main class="page container directory directory-{{ kind }}">
+  <div class="page-heading"><span>{% t 'discover' %}</span><h1>{% t kind %}</h1></div>
+  <div class="directory-grid">
+    {% for card in cards %}
+    <a class="directory-card" href="{% url 'events' %}?{{ card.filter }}={{ card.name|urlencode }}">
+      <div class="directory-image {% if not card.image %}portrait-placeholder{% endif %}">
+        {% if card.image %}<img src="{{ card.image }}" alt="{{ card.name }}" loading="lazy" data-directory-image>
+        {% elif kind == 'artists' %}<span aria-hidden="true">{{ card.name|first|upper }}</span>
+        {% else %}{% icon 'pin' %}{% endif %}
+      </div>
+      <div class="directory-copy"><div><h2>{{ card.name }}</h2><p>{% t 'upcoming_count' count=card.count %}</p></div>{% icon 'arrow' %}</div>
+    </a>
+    {% empty %}<div class="empty"><h3>{% t 'no_events' %}</h3><a href="{% url 'events' %}">{% t 'events' %}</a></div>{% endfor %}
+  </div>
+</main>
+{% endblock %}

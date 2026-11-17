@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build_frontend.cjs",
+    "check": "node --check static/motion.js && node --check static/figma.js"
+  },
+  "dependencies": {
+    "animejs": "^4.5.0",
+    "motion": "^14.14.0",
+    "motion-v": "^2.12.0"
+  }
+}

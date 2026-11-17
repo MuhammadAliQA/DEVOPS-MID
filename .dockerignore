@@ -1,0 +1,17 @@
+.venv
+.tmp
+.git
+.env
+.idea
+__pycache__
+*.sqlite3
+staticfiles
+uploads
+design-reference
+.agents
+.codex
+.aws
+node_modules
+deploy/.env.production
+*.dump
+*.tar.gz

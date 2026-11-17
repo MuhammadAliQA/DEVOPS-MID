@@ -1,0 +1,6 @@
+{% load ui %}
+<ol class="flow-steps" aria-label="{% t 'checkout' %}">
+  <li {% if request.resolver_match.url_name == 'seats' %}aria-current="step"{% else %}class="is-complete"{% endif %}>{% t 'seats' %}</li>
+  <li {% if request.resolver_match.url_name == 'checkout' %}aria-current="step"{% elif request.resolver_match.url_name == 'payment-page' %}class="is-complete"{% endif %}>{% t 'checkout' %}</li>
+  <li {% if request.resolver_match.url_name == 'payment-page' %}aria-current="step"{% endif %}>{% t 'step_payment' %}</li>
+</ol>
