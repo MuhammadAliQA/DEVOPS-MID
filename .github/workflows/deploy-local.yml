@@ -1,0 +1,98 @@
+
+name: TicketFlow Local Auto Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ticketflow-local-deploy
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy to Ubuntu VM
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Validate local deployment environment
+        run: |
+          test -f /home/user/DEVOPS-MID/.env
+          docker compose \
+            --project-name devops-mid \
+            --env-file /home/user/DEVOPS-MID/.env \
+            -f compose.yaml config --quiet
+
+      - name: Build application images
+        run: |
+          docker compose \
+            --project-name devops-mid \
+            --env-file /home/user/DEVOPS-MID/.env \
+            -f compose.yaml build web payment expiry-worker migrate
+
+      - name: Start database and cache
+        run: |
+          docker compose \
+            --project-name devops-mid \
+            --env-file /home/user/DEVOPS-MID/.env \
+            -f compose.yaml up -d db cache
+
+      - name: Wait for database and cache
+        run: |
+          for i in {1..30}; do
+            DB=$(docker inspect --format='{{.State.Health.Status}}' \
+              "$(docker compose -p devops-mid --env-file /home/user/DEVOPS-MID/.env ps -q db)")
+            CACHE=$(docker inspect --format='{{.State.Health.Status}}' \
+              "$(docker compose -p devops-mid --env-file /home/user/DEVOPS-MID/.env ps -q cache)")
+
+            if [ "$DB" = healthy ] && [ "$CACHE" = healthy ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker compose -p devops-mid --env-file /home/user/DEVOPS-MID/.env ps
+          exit 1
+
+      - name: Run database migrations
+        run: |
+          docker compose \
+            --project-name devops-mid \
+            --env-file /home/user/DEVOPS-MID/.env \
+            -f compose.yaml run --rm migrate
+
+      - name: Update application
+        run: |
+          docker compose \
+            --project-name devops-mid \
+            --env-file /home/user/DEVOPS-MID/.env \
+            -f compose.yaml up -d --remove-orphans
+
+      - name: Verify application readiness
+        run: |
+          for i in {1..30}; do
+            if curl --fail --silent \
+              http://192.168.56.101:18000/health/ready/; then
+              echo "Deployment successful"
+              exit 0
+            fi
+            sleep 3
+          done
+
+          docker compose -p devops-mid --env-file /home/user/DEVOPS-MID/.env ps
+          docker compose -p devops-mid --env-file /home/user/DEVOPS-MID/.env logs --tail=100
+          exit 1
+

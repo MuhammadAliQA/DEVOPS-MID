@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --crea
 COPY --chown=app:app . .
 COPY --from=frontend --chown=app:app /build/static/vendor ./static/vendor
 RUN python manage.py collectstatic --noinput
-RUN mkdir -p /app/uploads && chown app:app /app/uploads
+RUN mkdir -p /app/uploads /app/.tmp && chown -R app:app /app/uploads /app/.tmp
 USER app
 EXPOSE 8000
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--access-logfile", "-", "--error-logfile", "-"]
