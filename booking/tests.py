@@ -7,7 +7,7 @@ from unittest import skipUnless
 from unittest.mock import patch
 
 from django.contrib.auth.models import User, Permission
-from django.db import close_old_connections, connection
+from django.db import close_old_connections, connection, connections
 from django.test import Client, TestCase, TransactionTestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -297,7 +297,10 @@ class ConcurrencyTests(TransactionTestCase):
             except BookingError:
                 return 'unavailable'
             finally:
-                close_old_connections()
+                # Persistent, healthy connections survive close_old_connections().
+                # Each worker owns thread-local connections: close them before the
+                # thread exits so PostgreSQL can drop the test database afterwards.
+                connections.close_all()
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(attempt, [u.pk for u in self.users]))
         self.assertCountEqual(results, ['reserved', 'unavailable'])
