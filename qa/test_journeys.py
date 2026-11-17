@@ -375,7 +375,7 @@ class TicketFlowJourneys(unittest.TestCase):
         self.page.locator('input[name=_save]').first.click()
         expect(self.page).to_have_url(self.base_url + '/admin/booking/event/')
         self.assertEqual(self.db(lambda: Event.objects.get(title=title).seats.count()), 4)
-        for width in (1440, 768, 390):
+        for width in (1440, 1024, 1023, 768, 767, 390, 320):
             self.page.set_viewport_size({'width': width, 'height': 900})
             self.page.goto('/admin/')
             self.page.screenshot(path=str(self.case_dir / f'control-{width}.png'), full_page=True)
