@@ -41,7 +41,8 @@ class PlatformTests(TestCase):
         self.assertEqual(PaymentAttempt.objects.get(booking=booking).status, 'abandoned')
 
     @override_settings(AUTH_RATE_LIMIT=2)
-    def test_auth_limit_shared_across_paths_and_clients_but_not_ips(self):
+    @patch('config.middleware.time.time', return_value=1800000010)
+    def test_auth_limit_shared_across_paths_and_clients_but_not_ips(self, clock):
         for _ in range(2): self.client.post('/api/token/', {'username': 'bad', 'password': 'bad'})
         response = Client().post('/accounts/login/', {'username': 'bad', 'password': 'bad'})
         self.assertEqual(response.status_code, 429)
@@ -50,7 +51,8 @@ class PlatformTests(TestCase):
         self.assertEqual(self.client.get('/health/live/').status_code, 200)
 
     @override_settings(AUTH_RATE_LIMIT=1, TRUST_PROXY_HEADERS=False)
-    def test_untrusted_ip_header_cannot_bypass_limit(self):
+    @patch('config.middleware.time.time', return_value=1800000010)
+    def test_untrusted_ip_header_cannot_bypass_limit(self, clock):
         self.client.post('/api/token/', {}, HTTP_X_REAL_IP='192.0.2.1')
         self.assertEqual(self.client.post('/api/token/', {}, HTTP_X_REAL_IP='192.0.2.2').status_code, 429)
 
