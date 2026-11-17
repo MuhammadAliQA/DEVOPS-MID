@@ -3,11 +3,7 @@ name: TicketFlow CI
 
 on:
   push:
-<<<<<<< HEAD
-    branches: [main]
-=======
     branches-ignore: [main]
->>>>>>> c0560ba (UFARM-3845: account security, PyCharm setup and CI/CD)
   pull_request:
   workflow_call:
 
@@ -41,23 +37,17 @@ jobs:
           --health-retries 5
 
     env:
-<<<<<<< HEAD
-      DEBUG: "True"
-      SECRET_KEY: "ci-test-secret-key"
-      ALLOWED_HOSTS: "localhost,127.0.0.1"
-=======
       # Disposable HTTP test environment, not the production deployment.
       DEBUG: '1'
       SECRET_KEY: ci-only-disposable-django-key-not-for-production-use-2026
       ALLOWED_HOSTS: localhost,127.0.0.1,testserver
-      DB_HOST: localhost
->>>>>>> c0560ba (UFARM-3845: account security, PyCharm setup and CI/CD)
       DB_NAME: ticketflow
       DB_USER: ticketflow
       DB_PASSWORD: postgres
       DB_HOST: localhost
       DB_PORT: "5432"
-      REDIS_URL: redis://localhost:6379/0
+      PAYMENT_SECRET: ci-simulator-secret
+      REDIS_URL: ''
 
     steps:
       - name: Checkout source
@@ -96,26 +86,12 @@ jobs:
       - name: Check migrations
         run: python manage.py makemigrations --check --dry-run
 
-      - name: Run backend tests
-        run: python manage.py test
-
       - name: Run pip-audit
-        continue-on-error: true
         run: |
           pip install pip-audit
-<<<<<<< HEAD
-          pip-audit
-
-      - name: Prepare CI environment
-        run: cp .env.example .env
-
-      - name: Build Docker images
-        run: docker compose build
-
-=======
           pip-audit --progress-spinner off
-      - run: python manage.py check
-      - run: python manage.py makemigrations --check --dry-run
+      - run: npm run build && npm run check
+      - run: python manage.py collectstatic --noinput
       - name: Backend and payment tests
         shell: bash
         run: |
@@ -129,7 +105,6 @@ jobs:
         run: |
           gunicorn payment_service.wsgi:application --bind 127.0.0.1:8001 --daemon
           python scripts/payment_smoke.py
-      - run: python manage.py collectstatic --noinput
       - name: Install browser verification tools
         run: |
           pip install playwright
@@ -153,32 +128,19 @@ jobs:
             .tmp/screenshots/
             .tmp/qa/
             .tmp/ci/
-      - run: docker build -t ticketflow:ci .
->>>>>>> c0560ba (UFARM-3845: account security, PyCharm setup and CI/CD)
       - name: Compose service integration
         env:
           COMPOSE_PROJECT_NAME: ticketly-ci-${{ github.run_id }}-${{ github.run_attempt }}
           WEB_PORT: "18000"
           WEB_BIND_IP: "127.0.0.1"
         run: |
+          cp .env.example .env
+          docker compose config --quiet
           docker compose up -d --build
-          docker compose ps
-
-      - name: Wait for application
-        env:
-          WEB_PORT: "18000"
-        run: |
-          for i in {1..30}; do
-            if curl --fail --silent \
-              "http://127.0.0.1:${WEB_PORT}/health/ready/"; then
-              echo "Application is ready"
-              exit 0
-            fi
-            sleep 3
-          done
-
-          echo "Application did not become ready"
-          exit 1
+          python scripts/compose_smoke.py
+          docker compose exec -T web python scripts/http_smoke.py --allow-demo-data
+          docker compose exec -T web python scripts/admin_smoke.py --allow-demo-data
+          docker compose exec -T web python scripts/container_assets_check.py
 
       - name: Compose logs and cleanup
         if: always()
@@ -187,20 +149,7 @@ jobs:
           WEB_PORT: "18000"
           WEB_BIND_IP: "127.0.0.1"
         run: |
-          docker compose ps
-          docker compose logs --tail=100 || true
-          docker compose down -v --remove-orphans || true
-          rm -f .env
-
-      - name: Upload test artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ticketflow-ci-artifacts
-          path: |
-            test-results/
-            playwright-report/
-            coverage/
-          if-no-files-found: ignore
-          retention-days: 7
-
+          if [ -f .env ]; then
+            docker compose logs --no-color --tail=100
+            docker compose down --remove-orphans
+          fi

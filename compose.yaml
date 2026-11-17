@@ -82,7 +82,7 @@ services:
   web:
     <<: *app
     ports:
-  - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-18000}:8000"
+      - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-18000}:8000"
     volumes:
       - uploaded_posters:/app/uploads
     depends_on:

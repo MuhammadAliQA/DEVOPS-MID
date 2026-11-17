@@ -7,12 +7,23 @@ Target: Linux VPS, Docker Engine + Compose v2, Python 3.12, public DNS and ports
 1. Put this repository on the host (including `deploy/`). Copy `.env.production.example` to `.env.production` and set exact domain, TLS email, three independent secrets and a release image digest. Secret key: 64 random bytes; payment secret: at least 32 random bytes. Restrict the env file to the deployment account (`chmod 600`). Never upload it to GitHub.
 2. Point DNS to the host. If GHCR is private, authenticate the host with a read-only packages token via `docker login --password-stdin`.
 3. In GitHub, create a protected `production` environment with required reviewers. Configure `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH` (absolute path without spaces), `APP_HOST` as environment variables; configure `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` as secrets. Populate known_hosts using a host key verified independently; the workflow does not blindly trust ssh-keyscan output.
-4. Push to `main`: the release workflow runs reusable CI, publishes an immutable GHCR image only after CI passes, and then deploys through the `production` environment. Environment reviewer rules still apply. Other branches and pull requests run CI without production deployment. Manual release defaults to publishing only; select `deploy` on `main` to deploy manually. Remote deployment has not been verified from this workspace.
+4. Production GHCR/SSH releases are manual through `release.yml`. Its reusable CI must pass before publishing. Select `deploy` on `main` for production deployment; environment reviewer rules still apply. Production deployment has not been verified from this workspace.
 
-The main-branch test results appear under the release workflow's `verify / test`
-job; the standalone CI workflow excludes main pushes to avoid running the same
-suite twice. Failed tests block image publishing and deployment. Raw backend and
-Playwright logs are included in the `browser-screenshots` artifact under `ci/`.
+## Ubuntu VM auto-deploy
+
+Main pushes run `deploy-local.yml`: hosted CI first, then deployment on a
+self-hosted Linux x64 runner installed on the target Ubuntu VM. The standalone
+CI workflow excludes main pushes so these tests run once. Other branches and
+pull requests run CI without deploying. Production `release.yml` has no push
+trigger, so it cannot accidentally run alongside the local VM deployment.
+
+The VM runner must be online with Docker access. It reads the existing
+`/home/user/DEVOPS-MID/.env` and manages Compose project `devops-mid`; volumes are
+preserved. It builds the checked-out commit and checks readiness locally at
+`http://127.0.0.1:18000/health/ready/`. No secrets are stored in the workflow.
+A healthy local deployment does not certify public HTTPS, backup restore or
+production payment integration. Raw backend and Playwright CI logs are available
+in the `browser-screenshots` artifact under `ci/`.
 
 GitHub-hosted runners must be able to reach the configured SSH host. A VM behind
 local NAT is not reachable just because Docker works inside it. Configure a
