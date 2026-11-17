@@ -378,5 +378,15 @@ class TicketFlowJourneys(unittest.TestCase):
         for width in (1440, 768, 390):
             self.page.set_viewport_size({'width': width, 'height': 900})
             self.page.goto('/admin/')
-            self.assertTrue(self.page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1'))
             self.page.screenshot(path=str(self.case_dir / f'control-{width}.png'), full_page=True)
+            layout = self.page.evaluate('''() => ({
+                viewport: innerWidth,
+                document: document.documentElement.scrollWidth,
+                overflowing: [...document.querySelectorAll('body *')].filter(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.right > innerWidth + 1;
+                }).slice(0, 15).map(el => ({tag: el.tagName, id: el.id,
+                    className: el.className, right: el.getBoundingClientRect().right}))
+            })''')
+            self.assertLessEqual(layout['document'], layout['viewport'] + 1,
+                                 f'Admin dashboard overflow at {width}px: {layout}')

@@ -1,5 +1,6 @@
 {% extends "admin/base.html" %}{% load static %}
 {% block title %}{{ title }} | TICKETLY Control{% endblock %}
-{% block extrastyle %}{{ block.super }}<link rel="stylesheet" href="{% static 'admin/control.css' %}?v=1"><link rel="icon" href="{% static 'figma-favicon.png' %}">{% endblock %}
+{% block extrastyle %}{{ block.super }}<link rel="icon" href="{% static 'figma-favicon.png' %}">{% endblock %}
+{% block responsive %}{{ block.super }}<link rel="stylesheet" href="{% static 'admin/control.css' %}?v=2">{% endblock %}
 {% block branding %}<div class="control-brand"><a href="{% url 'admin:index' %}"><span class="control-mark">T</span>TICKETLY<span class="control-label">CONTROL</span></a></div>{% endblock %}
 {% block nav-global %}<nav class="control-shortcuts" aria-label="Platform navigatsiyasi"><a href="{% url 'home' %}">Sayt ↗</a>{% if perms.booking.view_payment %}<a href="{% url 'ops-dashboard' %}">Operations</a>{% endif %}{% if perms.booking.check_in_ticket %}<a href="{% url 'ops-gate' %}">Check-in</a>{% endif %}</nav>{% endblock %}
