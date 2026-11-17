@@ -77,6 +77,27 @@ class TicketFlowJourneys(unittest.TestCase):
         self.page.locator('.auth-card button').click()
         expect(self.page).to_have_url(self.base_url + '/')
 
+    def test_password_change_validation_and_mobile_layout(self):
+        self.login()
+        self.page.goto('/profile/')
+        self.page.locator('a[href="/accounts/password/change/"]').click()
+        new_password = 'Changed-QA-only!75291'
+        self.page.locator('#id_old_password').fill('incorrect-password')
+        self.page.locator('#id_new_password1').fill(new_password)
+        self.page.locator('#id_new_password2').fill(new_password)
+        self.page.locator('.auth-card button[type=submit]').click()
+        expect(self.page.locator('.errorlist')).not_to_have_count(0)
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        self.assertTrue(self.page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1'))
+        self.page.locator('#id_old_password').fill(self.password)
+        self.page.locator('#id_new_password1').fill(new_password)
+        self.page.locator('#id_new_password2').fill(new_password)
+        self.page.locator('.auth-card button[type=submit]').click()
+        expect(self.page).to_have_url(self.base_url + '/accounts/password/changed/')
+        self.page.locator('.auth-card a').click()
+        expect(self.page).to_have_url(self.base_url + '/profile/')
+        self.assertTrue(self.db(lambda: User.objects.get(pk=self.user.pk).check_password(new_password)))
+
     def reserve_ui(self):
         self.page.goto(f'/events/{self.event.pk}/seats/')
         self.page.locator('label.seat:has(input:not([disabled]))').first.click()

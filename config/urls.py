@@ -10,6 +10,11 @@ urlpatterns = [
     path('artists/', views.directory, {'kind': 'artists'}, name='artists'),
     path('venues/', views.directory, {'kind': 'venues'}, name='venues'),
     path('profile/', views.profile, name='profile'),
+    path('accounts/password/change/', auth.PasswordChangeView.as_view(
+        template_name='registration/password_change.html',
+        success_url='/accounts/password/changed/'), name='password_change'),
+    path('accounts/password/changed/', auth.PasswordChangeDoneView.as_view(
+        template_name='registration/password_changed.html'), name='password_change_done'),
     path('help/', views.information, name='help'),
     path('privacy/', views.information, {'section': 'privacy'}, name='privacy'),
     path('terms/', views.information, {'section': 'terms'}, name='terms'),

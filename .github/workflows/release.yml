@@ -1,5 +1,7 @@
-name: Tested image and optional production deployment
+name: Tested image and production deployment
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       deploy:
@@ -47,7 +49,7 @@ jobs:
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "Tested release image: \`$IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
   deploy:
-    if: inputs.deploy
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.deploy)
     needs: publish
     runs-on: ubuntu-latest
     environment: production
@@ -64,6 +66,12 @@ jobs:
           IMAGE: ${{ needs.publish.outputs.image }}
         run: |
           set -euo pipefail
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH APP_HOST SSH_KEY KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing production environment configuration: $name. See deploy/README.md."
+              exit 1
+            fi
+          done
           [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
           [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
           [[ "$DEPLOY_PATH" =~ ^/[a-zA-Z0-9_/-]+$ && "$DEPLOY_PATH" != / && "$DEPLOY_PATH" != *..* ]]

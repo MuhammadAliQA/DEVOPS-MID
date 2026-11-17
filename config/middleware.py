@@ -38,7 +38,7 @@ class RequestContextMiddleware:
 
 
 class AuthRateLimitMiddleware:
-    paths = {'/admin/login/', '/accounts/login/', '/accounts/register/', '/api/token/', '/api/token/refresh/', '/api/register/'}
+    paths = {'/admin/login/', '/accounts/login/', '/accounts/register/', '/accounts/password/change/', '/api/token/', '/api/token/refresh/', '/api/register/'}
 
     def __init__(self, get_response): self.get_response = get_response
 

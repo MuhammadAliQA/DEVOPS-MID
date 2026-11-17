@@ -294,6 +294,22 @@ COPY = {'discover': ('Kashf etish', 'Открыть', 'Discover'),
 
 COPY['step_payment'] = ('To‘lov', 'Оплата', 'Payment')
 
+COPY.update({
+    'change_password': ('Parolni almashtirish', 'Изменить пароль', 'Change password'),
+    'password_security_intro': ('Hisobingizni himoyalash uchun joriy parolni va yangi parolni kiriting.',
+        'Для защиты аккаунта введите текущий и новый пароль.',
+        'Enter your current password and a new password to secure your account.'),
+    'old_password': ('Joriy parol', 'Текущий пароль', 'Current password'),
+    'new_password1': ('Yangi parol', 'Новый пароль', 'New password'),
+    'new_password2': ('Yangi parolni takrorlang', 'Повторите новый пароль', 'Confirm new password'),
+    'password_changed': ('Parol yangilandi', 'Пароль изменён', 'Password changed'),
+    'password_changed_intro': ('Keyingi kirishda yangi paroldan foydalaning. Boshqa brauzer sessiyalarida qayta kirish talab qilinadi.',
+        'При следующем входе используйте новый пароль. В других браузерных сессиях потребуется войти заново.',
+        'Use your new password next time. Other browser sessions will require you to sign in again.'),
+    'back_to_profile': ('Profilga qaytish', 'Вернуться в профиль', 'Back to profile'),
+})
+
+
 def language():
     code = (get_language() or 'uz')[:2]
     return code if code in ('uz', 'ru', 'en') else 'uz'

@@ -7,7 +7,17 @@ Target: Linux VPS, Docker Engine + Compose v2, Python 3.12, public DNS and ports
 1. Put this repository on the host (including `deploy/`). Copy `.env.production.example` to `.env.production` and set exact domain, TLS email, three independent secrets and a release image digest. Secret key: 64 random bytes; payment secret: at least 32 random bytes. Restrict the env file to the deployment account (`chmod 600`). Never upload it to GitHub.
 2. Point DNS to the host. If GHCR is private, authenticate the host with a read-only packages token via `docker login --password-stdin`.
 3. In GitHub, create a protected `production` environment with required reviewers. Configure `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH` (absolute path without spaces), `APP_HOST` as environment variables; configure `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` as secrets. Populate known_hosts using a host key verified independently; the workflow does not blindly trust ssh-keyscan output.
-4. Trigger the release workflow. Its reusable CI must pass before publishing. Deployment is opt-in and requires environment approval. No workflow has been executed remotely in this workspace.
+4. Push to `main`: the release workflow runs reusable CI, publishes an immutable GHCR image only after CI passes, and then deploys through the `production` environment. Environment reviewer rules still apply. Other branches and pull requests run CI without production deployment. Manual release defaults to publishing only; select `deploy` on `main` to deploy manually. Remote deployment has not been verified from this workspace.
+
+The main-branch test results appear under the release workflow's `verify / test`
+job; the standalone CI workflow excludes main pushes to avoid running the same
+suite twice. Failed tests block image publishing and deployment. Raw backend and
+Playwright logs are included in the `browser-screenshots` artifact under `ci/`.
+
+GitHub-hosted runners must be able to reach the configured SSH host. A VM behind
+local NAT is not reachable just because Docker works inside it. Configure a
+reachable deployment host or a separately designed private runner/network setup
+before enabling deployment there. Keep production environment protections in place.
 
 ## Release / rollback
 

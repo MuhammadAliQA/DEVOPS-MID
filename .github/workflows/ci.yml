@@ -3,7 +3,11 @@ name: TicketFlow CI
 
 on:
   push:
+<<<<<<< HEAD
     branches: [main]
+=======
+    branches-ignore: [main]
+>>>>>>> c0560ba (UFARM-3845: account security, PyCharm setup and CI/CD)
   pull_request:
   workflow_call:
 
@@ -37,9 +41,17 @@ jobs:
           --health-retries 5
 
     env:
+<<<<<<< HEAD
       DEBUG: "True"
       SECRET_KEY: "ci-test-secret-key"
       ALLOWED_HOSTS: "localhost,127.0.0.1"
+=======
+      # Disposable HTTP test environment, not the production deployment.
+      DEBUG: '1'
+      SECRET_KEY: ci-only-disposable-django-key-not-for-production-use-2026
+      ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      DB_HOST: localhost
+>>>>>>> c0560ba (UFARM-3845: account security, PyCharm setup and CI/CD)
       DB_NAME: ticketflow
       DB_USER: ticketflow
       DB_PASSWORD: postgres
@@ -91,6 +103,7 @@ jobs:
         continue-on-error: true
         run: |
           pip install pip-audit
+<<<<<<< HEAD
           pip-audit
 
       - name: Prepare CI environment
@@ -99,6 +112,49 @@ jobs:
       - name: Build Docker images
         run: docker compose build
 
+=======
+          pip-audit --progress-spinner off
+      - run: python manage.py check
+      - run: python manage.py makemigrations --check --dry-run
+      - name: Backend and payment tests
+        shell: bash
+        run: |
+          mkdir -p .tmp/ci
+          set -o pipefail
+          python manage.py test booking payment_service --verbosity 2 2>&1 | tee .tmp/ci/backend-tests.log
+      - run: python -m unittest deploy.test_release -v
+      - run: python manage.py migrate --noinput
+      - run: python manage.py seed_demo
+      - name: Signed HTTP payment smoke test
+        run: |
+          gunicorn payment_service.wsgi:application --bind 127.0.0.1:8001 --daemon
+          python scripts/payment_smoke.py
+      - run: python manage.py collectstatic --noinput
+      - name: Install browser verification tools
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Browser smoke and screenshots
+        run: |
+          gunicorn config.wsgi:application --bind 127.0.0.1:8000 --daemon
+          python scripts/browser_smoke.py
+          python scripts/http_smoke.py --allow-demo-data
+      - name: Full isolated Playwright AQA
+        shell: bash
+        run: |
+          mkdir -p .tmp/ci
+          set -o pipefail
+          python qa/run.py 2>&1 | tee .tmp/ci/playwright.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-screenshots
+          path: |
+            .tmp/screenshots/
+            .tmp/qa/
+            .tmp/ci/
+      - run: docker build -t ticketflow:ci .
+>>>>>>> c0560ba (UFARM-3845: account security, PyCharm setup and CI/CD)
       - name: Compose service integration
         env:
           COMPOSE_PROJECT_NAME: ticketly-ci-${{ github.run_id }}-${{ github.run_attempt }}
