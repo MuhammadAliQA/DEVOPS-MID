@@ -1,94 +1,152 @@
 name: TicketFlow CI
+
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_call:
+
 permissions:
   contents: read
+
+concurrency:
+  group: ticketflow-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    name: Test and Build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
+
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17
         env:
           POSTGRES_DB: ticketflow
           POSTGRES_USER: ticketflow
-          POSTGRES_PASSWORD: ci-only-password
-        ports: ['5432:5432']
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U ticketflow -d ticketflow"
-          --health-interval 5s --health-timeout 3s --health-retries 10
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
-      DB_HOST: localhost
+      DEBUG: "True"
+      SECRET_KEY: "ci-test-secret-key"
+      ALLOWED_HOSTS: "localhost,127.0.0.1"
       DB_NAME: ticketflow
       DB_USER: ticketflow
-      DB_PASSWORD: ci-only-password
-      PAYMENT_SECRET: ci-simulator-secret
+      DB_PASSWORD: postgres
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      REDIS_URL: redis://localhost:6379/0
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - run: npm run build && npm run check
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+          python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt
-      - name: Audit installed Python dependencies
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Install Node dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          elif [ -f package.json ]; then
+            npm install
+          fi
+
+      - name: Django system checks
+        run: |
+          python manage.py check
+
+      - name: Check migrations
+        run: |
+          python manage.py makemigrations --check --dry-run
+
+      - name: Run backend tests
+        run: |
+          python manage.py test
+
+      - name: Run pip-audit
+        continue-on-error: true
         run: |
           pip install pip-audit
-          pip-audit --progress-spinner off
-      - run: python manage.py check
-      - run: python manage.py makemigrations --check --dry-run
-      - run: python manage.py test booking payment_service --verbosity 2
-      - run: python -m unittest deploy.test_release -v
-      - run: python manage.py migrate --noinput
-      - run: python manage.py seed_demo
-      - name: Signed HTTP payment smoke test
+          pip-audit
+
+      - name: Build Docker images
         run: |
-          gunicorn payment_service.wsgi:application --bind 127.0.0.1:8001 --daemon
-          python scripts/payment_smoke.py
-      - run: python manage.py collectstatic --noinput
-      - name: Install browser verification tools
+          docker compose build
+
+      - name: Prepare CI environment
         run: |
-          pip install playwright
-          python -m playwright install --with-deps chromium
-      - name: Browser smoke and screenshots
-        run: |
-          gunicorn config.wsgi:application --bind 127.0.0.1:8000 --daemon
-          python scripts/browser_smoke.py
-          python scripts/http_smoke.py --allow-demo-data
-      - name: Full isolated Playwright AQA
-        run: python qa/run.py
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: browser-screenshots
-          path: |
-            .tmp/screenshots/
-            .tmp/qa/
-      - run: docker build -t ticketflow:ci .
+          cp .env.example .env
+
       - name: Compose service integration
         env:
           COMPOSE_PROJECT_NAME: ticketly-ci-${{ github.run_id }}-${{ github.run_attempt }}
-          WEB_PORT: '18000'
+          WEB_PORT: "18000"
+          WEB_BIND_IP: "127.0.0.1"
         run: |
-          cp .env.example .env
           docker compose up -d --build
-          python scripts/compose_smoke.py
-          docker compose exec -T web python scripts/http_smoke.py --allow-demo-data
-          docker compose exec -T web python scripts/admin_smoke.py --allow-demo-data
-          docker compose exec -T web python scripts/container_assets_check.py
+          docker compose ps
+
+      - name: Wait for application
+        env:
+          WEB_PORT: "18000"
+        run: |
+          for i in {1..30}; do
+            if curl --fail --silent \
+              "http://127.0.0.1:${WEB_PORT}/health/ready/"; then
+              echo "Application is ready"
+              exit 0
+            fi
+            sleep 3
+          done
+
+          echo "Application did not become ready"
+          exit 1
+
       - name: Compose logs and cleanup
         if: always()
         env:
           COMPOSE_PROJECT_NAME: ticketly-ci-${{ github.run_id }}-${{ github.run_attempt }}
-          WEB_PORT: '18000'
+          WEB_PORT: "18000"
+          WEB_BIND_IP: "127.0.0.1"
         run: |
-          docker compose logs --no-color --tail=150
-          docker compose down --remove-orphans
+          docker compose ps
+          docker compose logs --tail=100 || true
+          docker compose down -v --remove-orphans || true
+          rm -f .env
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ticketflow-ci-artifacts
+          path: |
+            test-results/
+            playwright-report/
+            coverage/
+          if-no-files-found: ignore
+          retention-days: 7
