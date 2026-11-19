@@ -87,7 +87,7 @@ jobs:
         run: |
           for i in {1..30}; do
             if curl --fail --silent \
-              --max-time 5 http://127.0.0.1:18001/health/ready/; then
+              --max-time 5 http://192.168.56.101:18001/health/ready/; then
               echo "Deployment successful"
               exit 0
             fi
