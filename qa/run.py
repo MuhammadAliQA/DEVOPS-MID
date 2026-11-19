@@ -84,7 +84,7 @@ def main():
         from playwright.sync_api import sync_playwright
         # Fail as BLOCKED before any test setup if browser startup is unavailable.
         playwright = sync_playwright().start()
-        browser = getattr(playwright, args.browser).launch(headless=True)
+        browser = getattr(playwright, args.browser).launch(headless=True, **({'executable_path': os.environ['QA_BROWSER_PATH'], 'args': ['--no-sandbox', '--disable-dev-shm-usage']} if os.environ.get('QA_BROWSER_PATH') else {}))
         def prepare_database():
             from django.db import close_old_connections
             call_command('migrate', verbosity=0)

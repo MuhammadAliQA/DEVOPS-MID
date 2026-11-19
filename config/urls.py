@@ -30,6 +30,7 @@ urlpatterns = [
     path('bookings/<uuid:pk>/success/', views.success, name='success'),
     path('bookings/<uuid:pk>/pay/', views.payment, name='payment'),
     path('bookings/<uuid:pk>/cancel/', views.cancel_booking, name='cancel'),
+    path('bookings/<uuid:pk>/refund/', views.refund_booking, name='refund'),
     path('bookings/<uuid:pk>/calendar/', views.calendar, name='calendar'),
     path('tickets/', views.wallet, name='wallet'),
     path('tickets/<uuid:pk>/qr/', views.qr, name='qr'),
@@ -59,6 +60,8 @@ urlpatterns = [
     path('api/bookings/<uuid:pk>/pay/', api.payment),
     path('api/bookings/<uuid:pk>/checkout/', api.checkout),
     path('api/bookings/<uuid:pk>/cancel/', api.cancel_reservation),
+    path('api/bookings/<uuid:pk>/refund/', api.refund_booking),
+    path('api/events/<int:pk>/', api.event_detail),
     path('health/live/', views.live),
     path('health/ready/', views.ready),
 ]

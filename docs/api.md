@@ -13,7 +13,7 @@ Base path: `/api/`. JSON requests; amounts are positive integer UZS, not floats.
 | GET | `/api/bookings/{uuid}/` | Owner | State, amount, expiry, ticket UUIDs |
 | POST | `/api/bookings/{uuid}/pay/` | Owner | `{"outcome":"approve"}` or `decline`; paid state on success |
 
-Malformed reservation input returns 400, unavailable seats return 409, another customer's resource returns 404. Anonymous access to protected endpoints returns 401 under JWT authentication. Public API requests use a basic 60/minute per-process DRF throttle; this is not a distributed abuse-prevention service.
+Malformed reservation input returns 400, unavailable seats return 409, another customer's resource returns 404. Anonymous access to protected endpoints returns 401 under JWT authentication. Public API requests use a basic 60/minute per-IP DRF throttle and signed-in callers 600/minute per account (`DEFAULT_THROTTLE_RATES`; any override must define both `anon` and `user`). With the Redis cache this is shared between workers, but it is still not a substitute for edge rate limiting.
 
 ## Internal payment simulator
 
@@ -33,3 +33,14 @@ Authenticated endpoints (session + CSRF or Bearer JWT), scoped to the current bo
 
 All web/API responses carry a generated `X-Request-ID`. Authentication POST endpoints share a configurable IP limit (default 20 per fixed minute). Exceeding it returns 429 with `Retry-After`; shared-cache failure returns 503. Production trusts only the IP header overwritten by the private Caddy ingress.
 
+
+# Backend additions (19 November 2026)
+
+- `GET /api/events/`: still a plain JSON list, now with `city`, `artist`, `refundable`, `min_price` and live `available_seats`. Optional query: `q`, `category`, `venue`, `max_price`, `ordering=price`, `limit` (1-500) and `offset`. The number of matches is returned in the `X-Total-Count` header. Invalid `limit`/`offset` gives 400 `invalid_pagination`.
+- `GET /api/events/{id}/`: one published upcoming event (404 otherwise).
+- `GET /api/bookings/`: the caller's own bookings, newest first (max 100), optional `?status=held|paid|expired|cancelled|refunded`.
+- `POST /api/bookings/{uuid}/refund/`: refunds a **paid** booking of a refundable event, at least `REFUND_WINDOW_HOURS` (default 24) before it starts and before any ticket was scanned. Seats return to sale and tickets stop validating. Otherwise 409 with `code` `refund_not_allowed` or `refund_window_closed`. Payments are simulated, so no money moves; refunded bookings are excluded from revenue and ticket counts.
+- `GET /api/bookings/{uuid}/` lists ticket UUIDs only while the booking is `paid`.
+- New stable error codes: `invalid_selection`, `booking_closed`, `seat_unavailable`, `ticket_invalid`, `ticket_used`, `refund_not_allowed`, `refund_window_closed`.
+- `POST /api/register/` now rejects an email already used by another account (400); the field stays optional.
+- Web: `POST /bookings/{uuid}/refund/`; `POST /events/{id}/favorite/` answers JSON `{"favorite": bool}` when called with `X-Requested-With: fetch`.

@@ -1,11 +1,13 @@
+from .forms import RegisterForm
 from datetime import timedelta
+import logging
 import uuid
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.db import connection
-from django.db.models import Min, Max, Count, Q
+from django.db.models import Min, Max, Count, Q, OuterRef, Subquery
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -14,10 +16,12 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 from .forms import CheckoutForm, DiscoveryForm, ProfileForm, SubscriptionForm
 from .models import Booking, Event, Favorite, NewsletterSubscription, Ticket
-from .services import BookingError, cancel, check_in, expire_event, pay, reserve, review_booking
+from .services import BookingError, can_refund, cancel, check_in, expire_event, expire_user_holds, pay, refund, reserve, review_booking
 from .qr import render_svg
 from .permissions import operator_required
 from .translations import tr, language
+
+logger = logging.getLogger(__name__)
 
 
 def home(request, listing=False):
@@ -43,14 +47,22 @@ def home(request, listing=False):
         favorites = list(Favorite.objects.filter(user=request.user).values_list('event_id', flat=True))
         if request.GET.get('favorites') == '1':
             events = events.filter(pk__in=favorites)
-    venue_cards = []
-    for venue in Event.objects.filter(published=True, starts_at__gt=timezone.now()).values('venue', 'city').annotate(count=Count('pk'))[:3]:
-        sample = Event.objects.filter(published=True, venue=venue['venue']).first()
-        venue_cards.append({**venue, 'image': sample.venue_photo})
+    # Fix N+1: use a Subquery to fetch a sample venue_photo per venue in one query
+    sample_photo_qs = (
+        Event.objects.filter(published=True, venue=OuterRef('venue'), venue_photo__gt='')
+        .order_by('starts_at')
+        .values('venue_photo')[:1]
+    )
+    venue_cards = list(
+        Event.objects.filter(published=True, starts_at__gt=timezone.now())
+        .values('venue', 'city')
+        .annotate(count=Count('pk'), image=Subquery(sample_photo_qs))
+        [:3]
+    )
     return render(request, 'events.html' if listing or request.GET else 'home.html', {'events': events, 'form': form, 'favorites': favorites, 'venue_cards': venue_cards,
                                        'categories': [('all', 'zap'), ('music', 'music'), ('sport', 'users'), ('theatre', 'sparkles'), ('festival', 'calendar'), ('cinema', 'ticket'), ('tech', 'zap')],
                                        'featured': events.first(),
-                                       'venues': Event.objects.filter(published=True).values_list('venue', flat=True).distinct()})
+                                       'venues': Event.objects.filter(published=True).order_by().values_list('venue', flat=True).distinct()})
 
 
 def detail(request, pk):
@@ -91,11 +103,27 @@ def poster(request, pk):
 
 
 def register(request):
-    form = UserCreationForm(request.POST or None)
+    target = request.POST.get('next') or request.GET.get('next', '')
+    form = RegisterForm(request.POST or None)
+
     if request.method == 'POST' and form.is_valid():
         login(request, form.save())
+        messages.success(request, tr('welcome'))
+
+        if target and url_has_allowed_host_and_scheme(
+            target,
+            allowed_hosts={request.get_host()},
+            require_https=request.is_secure(),
+        ):
+            return redirect(target)
+
         return redirect('home')
-    return render(request, 'registration/register.html', {'form': form})
+
+    return render(
+        request,
+        'registration/register.html',
+        {'form': form, 'next': target},
+    )
 
 
 @login_required
@@ -113,7 +141,7 @@ def book(request, pk):
 
 @login_required
 def checkout(request, pk):
-    booking = get_object_or_404(Booking, pk=pk, user=request.user)
+    booking = get_object_or_404(Booking.objects.select_related('event'), pk=pk, user=request.user)
     expire_event(booking.event_id)
     booking.refresh_from_db()
     form = CheckoutForm(request.POST or None, initial={
@@ -131,7 +159,7 @@ def checkout(request, pk):
 
 @login_required
 def payment_page(request, pk):
-    booking = get_object_or_404(Booking, pk=pk, user=request.user)
+    booking = get_object_or_404(Booking.objects.select_related('event'), pk=pk, user=request.user)
     expire_event(booking.event_id)
     booking.refresh_from_db()
     return render(request, 'payment.html', {'booking': booking, 'event': booking.event, 'no_footer': True})
@@ -139,7 +167,7 @@ def payment_page(request, pk):
 
 @login_required
 def success(request, pk):
-    booking = get_object_or_404(Booking, pk=pk, user=request.user, status='paid')
+    booking = get_object_or_404(Booking.objects.select_related('event'), pk=pk, user=request.user, status='paid')
     return render(request, 'success.html', {'booking': booking, 'event': booking.event, 'no_footer': True})
 
 
@@ -169,12 +197,26 @@ def cancel_booking(request, pk):
 
 @login_required
 def wallet(request):
+    expire_user_holds(request.user)
     bookings = Booking.objects.filter(user=request.user).select_related('event').prefetch_related('items__seat', 'items__ticket')
-    for event_id in bookings.filter(status='held').values_list('event_id', flat=True).distinct():
-        expire_event(event_id)
     past = request.GET.get('tab') == 'past'
     bookings = bookings.filter(event__starts_at__lt=timezone.now()) if past else bookings.filter(event__starts_at__gte=timezone.now())
+    bookings = list(bookings)
+    for booking in bookings:
+        booking.refundable_now = can_refund(booking)
     return render(request, 'wallet.html', {'bookings': bookings, 'past': past})
+
+
+@login_required
+@require_POST
+def refund_booking(request, pk):
+    get_object_or_404(Booking, pk=pk, user=request.user)
+    try:
+        refund(request.user, pk)
+        messages.success(request, tr('refund_done'))
+    except BookingError as exc:
+        messages.error(request, tr(exc.code))
+    return redirect('wallet')
 
 
 @login_required
@@ -182,11 +224,26 @@ def wallet(request):
 def favorite(request, pk):
     event = get_object_or_404(Event, pk=pk, published=True)
     obj, created = Favorite.objects.get_or_create(user=request.user, event=event)
+
+    is_favorite = created
     if not created:
         obj.delete()
+        is_favorite = False
+
+    if request.headers.get('X-Requested-With') == 'fetch':
+        return JsonResponse({
+            'favorite': is_favorite,
+            'event': event.pk,
+        })
+
     target = request.POST.get('next', '')
-    if target and url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+    if target and url_has_allowed_host_and_scheme(
+        target,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
         return redirect(target)
+
     return redirect('home')
 
 
@@ -224,14 +281,17 @@ def scan(request, pk):
     if request.method == 'POST':
         try:
             ticket = check_in(ticket.pk, actor=request.user)
-            messages.success(request, 'Kirish tasdiqlandi.')
+            messages.success(request, tr('check_in_success'))
         except BookingError as exc:
             messages.error(request, tr(exc.code))
-    return render(request, 'scan.html', {'ticket': ticket})
+    valid = ticket.item.booking.status == Booking.Status.PAID
+    return render(request, 'scan.html', {'ticket': ticket, 'valid': valid})
 
 
 def live(request):
-    return JsonResponse({'status': 'ok', 'service': 'ticketflow'})
+    response = JsonResponse({'status': 'ok', 'service': 'ticketflow'})
+    response['Cache-Control'] = 'no-store'
+    return response
 
 
 def ready(request):
@@ -243,6 +303,7 @@ def ready(request):
         if cache.get('readiness') != 'ok':
             raise RuntimeError('cache unavailable')
     except Exception:
+        logger.exception('Health check failed')
         return JsonResponse({'status': 'unavailable'}, status=503)
     return JsonResponse({'status': 'ok'})
 

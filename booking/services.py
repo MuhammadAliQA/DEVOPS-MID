@@ -31,23 +31,42 @@ def audit(actor, action, target, **details):
 
 
 def _expire(event):
-    stale = Booking.objects.filter(event=event, status=Booking.Status.HELD, expires_at__lte=timezone.now())
-    stale_ids = list(stale.values_list('pk', flat=True))
-    Seat.objects.filter(reservation__in=stale).update(reservation=None)
-    stale.update(status=Booking.Status.EXPIRED)
+    """Release stale holds of an already locked event. Returns how many were expired."""
+    stale_ids = list(Booking.objects.filter(event=event, status=Booking.Status.HELD,
+                                            expires_at__lte=timezone.now()).values_list('pk', flat=True))
+    if not stale_ids:
+        return 0
+    Seat.objects.filter(reservation_id__in=stale_ids).update(reservation=None)
+    Booking.objects.filter(pk__in=stale_ids).update(status=Booking.Status.EXPIRED)
     AuditLog.objects.bulk_create([AuditLog(action='booking.expired', target=str(pk), details={'event': event.pk}) for pk in stale_ids])
+    return len(stale_ids)
 
 
-@transaction.atomic
 def expire_event(event_id):
-    event = Event.objects.select_for_update().get(pk=event_id)
-    _expire(event)
+    """Expire stale holds for one event.
+
+    Page views and the 5-second seat-map poll call this constantly, so the common
+    case (nothing stale) is a single indexed SELECT with no row lock and no writes.
+    """
+    if not Booking.objects.filter(event_id=event_id, status=Booking.Status.HELD,
+                                  expires_at__lte=timezone.now()).exists():
+        return 0
+    with transaction.atomic():
+        event = Event.objects.select_for_update().get(pk=event_id)
+        return _expire(event)
+
+
+def expire_user_holds(user):
+    """Expire only this customer's overdue holds (used by the ticket wallet)."""
+    event_ids = set(Booking.objects.filter(user=user, status=Booking.Status.HELD, expires_at__lte=timezone.now())
+                    .order_by().values_list('event_id', flat=True))
+    return sum(expire_event(event_id) for event_id in event_ids)
 
 
 @transaction.atomic
 def reserve(user, event_id, seat_ids, idempotency_key=None):
     if not seat_ids or len(seat_ids) > 8 or len(set(seat_ids)) != len(seat_ids):
-        raise BookingError('1 dan 8 tagacha turli o‘rindiq tanlang.')
+        raise BookingError('1 dan 8 tagacha turli o‘rindiq tanlang.', 'invalid_selection')
     if idempotency_key:
         try:
             idempotency_key = uuid.UUID(str(idempotency_key))
@@ -68,11 +87,11 @@ def reserve(user, event_id, seat_ids, idempotency_key=None):
         raise BookingError('Faol bronlar limitiga yetdingiz. Avval to‘lang yoki bronni bekor qiling.', 'hold_limit')
     event = Event.objects.select_for_update().get(pk=event_id)
     if not event.published or event.starts_at <= timezone.now():
-        raise BookingError('Bu tadbir uchun bron yopilgan.')
+        raise BookingError('Bu tadbir uchun bron yopilgan.', 'booking_closed')
     _expire(event)
     seats = list(Seat.objects.select_for_update().filter(event=event, pk__in=seat_ids))
     if len(seats) != len(seat_ids) or any(s.reservation_id for s in seats):
-        raise BookingError('O‘rindiq band yoki noto‘g‘ri. Qayta tanlang.')
+        raise BookingError('O‘rindiq band yoki noto‘g‘ri. Qayta tanlang.', 'seat_unavailable')
     booking = Booking.objects.create(user=user, event=event, total=sum(s.price for s in seats),
                                      expires_at=min(timezone.now() + timedelta(minutes=10), event.starts_at), idempotency_key=idempotency_key or None)
     BookingSeat.objects.bulk_create([BookingSeat(booking=booking, seat=s, price=s.price) for s in seats])
@@ -94,7 +113,7 @@ def simulate_payment(booking, outcome):
             raise BookingError('Demo to‘lov rad etildi. Qayta urinishingiz mumkin.', 'payment_declined')
         expected = hashlib.sha256(f'demo:{booking.pk}:{booking.total}:UZS'.encode()).hexdigest()
         if data.get('reference') != expected:
-            raise BookingError('Payment servis javobi noto‘g‘ri.')
+            raise BookingError('Payment servis javobi noto‘g‘ri.', 'payment_unavailable')
         return expected
     except (URLError, TimeoutError, ValueError, OSError, TypeError, AttributeError) as exc:
         raise BookingError('Payment servisi hozir ishlamayapti. Bron tugashidan oldin qayta urining.', 'payment_unavailable') from exc
@@ -153,7 +172,7 @@ def cancel(user, booking_id, actor=None):
     Event.objects.select_for_update().get(pk=booking.event_id)
     booking = Booking.objects.select_for_update().get(pk=booking.pk)
     if booking.status != Booking.Status.HELD:
-        raise BookingError('Faqat faol bronni bekor qilish mumkin.')
+        raise BookingError('Faqat faol bronni bekor qilish mumkin.', 'inactive_booking')
     Seat.objects.filter(reservation=booking).update(reservation=None)
     booking.status = Booking.Status.CANCELLED
     booking.save(update_fields=['status'])
@@ -161,12 +180,49 @@ def cancel(user, booking_id, actor=None):
 
 
 @transaction.atomic
+def refund(user, booking_id, actor=None):
+    """Refund a paid booking: release the seats and invalidate every ticket.
+
+    Allowed only for refundable events, before the refund window closes and while
+    no ticket has been scanned. No money moves: payments are simulated, so the
+    Payment row stays as the historical record and revenue reports skip refunded
+    bookings. Lock order matches the module docstring (event, then booking).
+    """
+    booking = Booking.objects.get(pk=booking_id, user=user)
+    event = Event.objects.select_for_update().get(pk=booking.event_id)
+    booking = Booking.objects.select_for_update().get(pk=booking.pk)
+    if booking.status != Booking.Status.PAID:
+        raise BookingError('Faqat to‘langan bronni qaytarish mumkin.', 'refund_not_allowed')
+    if not event.refundable:
+        raise BookingError('Bu tadbir uchun to‘lov qaytarilmaydi.', 'refund_not_allowed')
+    window = timedelta(hours=getattr(settings, 'REFUND_WINDOW_HOURS', 24))
+    if event.starts_at - timezone.now() < window:
+        raise BookingError('Qaytarish muddati o‘tgan.', 'refund_window_closed')
+    if Ticket.objects.filter(item__booking=booking, checked_in_at__isnull=False).exists():
+        raise BookingError('Ishlatilgan chipta uchun to‘lov qaytarilmaydi.', 'refund_not_allowed')
+    Seat.objects.filter(reservation=booking).update(reservation=None)
+    booking.status = Booking.Status.REFUNDED
+    booking.refunded_at = timezone.now()
+    booking.save(update_fields=['status', 'refunded_at'])
+    audit(actor or user, 'booking.refunded', booking.pk, amount=booking.total, event=event.pk)
+    return booking
+
+
+def can_refund(booking):
+    """Cheap UI hint; refund() stays the authority and re-checks under locks."""
+    event = booking.event
+    window = timedelta(hours=getattr(settings, 'REFUND_WINDOW_HOURS', 24))
+    return (booking.status == Booking.Status.PAID and event.refundable
+            and event.starts_at - timezone.now() >= window)
+
+
+@transaction.atomic
 def check_in(ticket_id, actor=None):
     ticket = Ticket.objects.select_for_update().get(pk=ticket_id)
     if ticket.item.booking.status != Booking.Status.PAID:
-        raise BookingError('Chipta haqiqiy emas.')
+        raise BookingError('Chipta haqiqiy emas.', 'ticket_invalid')
     if ticket.checked_in_at:
-        raise BookingError('Bu chipta avval ishlatilgan.')
+        raise BookingError('Bu chipta avval ishlatilgan.', 'ticket_used')
     ticket.checked_in_at = timezone.now()
     ticket.save(update_fields=['checked_in_at'])
     audit(actor, 'ticket.checked_in', ticket.pk, event=ticket.item.booking.event_id)

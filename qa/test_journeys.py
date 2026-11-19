@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import io
+import os
 import re
 import unittest
 import uuid
@@ -39,8 +40,8 @@ class TicketFlowJourneys(unittest.TestCase):
         self.case_dir.mkdir()
         self.console_errors = []
         self.server_errors = []
-        self.context = self.browser.new_context(base_url=self.base_url, locale='uz-UZ', viewport={'width': 1440, 'height': 1000},
-                                                record_video_dir=str(self.case_dir / 'video'))
+        video = {} if os.environ.get('QA_NO_VIDEO') else {'record_video_dir': str(self.case_dir / 'video')}
+        self.context = self.browser.new_context(base_url=self.base_url, locale='uz-UZ', viewport={'width': 1440, 'height': 1000}, **video)
         self.context.tracing.start(screenshots=True, snapshots=True, sources=True)
         self.page = self.context.new_page()
         self.page.on('pageerror', lambda error: self.console_errors.append(str(error)))
@@ -149,10 +150,12 @@ class TicketFlowJourneys(unittest.TestCase):
         self.login()
         self.page.goto('/?q=' + self.suffix)
         self.page.locator('.heart').click()
+        expect(self.page.locator('.heart')).to_have_class(re.compile('liked'))  # saved in place via fetch, no reload
         self.page.goto('/?favorites=1')
         expect(self.page.locator('.event-card')).to_have_count(1)
         expect(self.page.locator('.heart')).to_have_class(re.compile('liked'))
         self.page.locator('.heart').click()
+        expect(self.page.locator('.event-card')).to_have_count(0)  # card animates out and is removed
         self.page.goto('/?favorites=1')
         expect(self.page.locator('.event-card')).to_have_count(0)
 
@@ -196,6 +199,7 @@ class TicketFlowJourneys(unittest.TestCase):
         self.login()
         booking_id = self.reserve_ui()
         self.page.get_by_role('button', name='Bronni bekor qilish').click()
+        self.page.get_by_role('button', name='Ha, tasdiqlayman').click()  # animated confirm dialog
         expect(self.page).to_have_url(self.base_url + '/tickets/')
         self.assertEqual(self.db(lambda: Booking.objects.get(pk=booking_id).status), 'cancelled')
         self.assertIsNone(self.db(lambda: Seat.objects.get(pk=self.seat_id).reservation_id))

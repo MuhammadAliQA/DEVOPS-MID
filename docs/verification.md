@@ -29,7 +29,7 @@ The initial baseline below is retained as history; the counts above supersede it
 | Customer + staff HTTP journey | Passed real sessions and CSRF, with no mocked payment transport |
 | QR generation | Private SVG returned successfully using installed OpenCV backend |
 | QR machine readability | Generated SVG modules reconstructed into a raster; OpenCV decoder recovered the exact check-in URL |
-| JavaScript syntax | `node --check static/app.js` passed |
+| JavaScript syntax | `node --check static/motion.js` and `static/figma.js` passed (legacy unused `app.js` removed) |
 | Compose configuration | `docker compose config --quiet` passed with a local validation password |
 
 The HTTP journey creates an event and seats through the custom Operations form, registers a customer through the website, searches, reserves, declines then approves payment, retries approval without issuing another ticket, retrieves wallet/QR/calendar, signs in as staff, checks in once, rejects duplicate check-in, and exports filtered CSV. The script hides its synthetic event and disables its synthetic accounts after completing the journey. It is meant for disposable demo data only.

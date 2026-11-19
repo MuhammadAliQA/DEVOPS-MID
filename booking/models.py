@@ -55,6 +55,7 @@ class Booking(models.Model):
         PAID = 'paid', "To‘langan"
         EXPIRED = 'expired', 'Vaqti tugagan'
         CANCELLED = 'cancelled', 'Bekor qilingan'
+        REFUNDED = 'refunded', 'Qaytarilgan'
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     event = models.ForeignKey(Event, on_delete=models.PROTECT)
@@ -68,6 +69,7 @@ class Booking(models.Model):
     contact_phone = models.CharField(max_length=20, blank=True)
     discount = models.PositiveIntegerField(default=0)
     promo_code = models.CharField(max_length=32, blank=True)
+    refunded_at = models.DateTimeField(null=True, blank=True)
 
     @property
     def subtotal(self):

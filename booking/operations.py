@@ -22,15 +22,17 @@ from .permissions import operator_required
 def dashboard(request):
     today = timezone.localdate()
     start = today - timedelta(days=6)
-    daily = {entry['day']: entry['total'] for entry in Payment.objects.filter(created_at__date__gte=start)
+    earned = Payment.objects.exclude(booking__status=Booking.Status.REFUNDED)
+    daily = {entry['day']: entry['total'] for entry in earned.filter(created_at__date__gte=start)
              .annotate(day=TruncDate('created_at')).values('day').annotate(total=Sum('amount'))}
     peak = max(daily.values(), default=1) or 1
     chart = [{'day': start + timedelta(days=i), 'total': daily.get(start + timedelta(days=i), 0),
               'height': round(daily.get(start + timedelta(days=i), 0) / peak * 100)} for i in range(7)]
-    tickets = Ticket.objects.count()
-    checked = Ticket.objects.filter(checked_in_at__isnull=False).count()
+    valid_tickets = Ticket.objects.filter(item__booking__status=Booking.Status.PAID)
+    tickets = valid_tickets.count()
+    checked = valid_tickets.filter(checked_in_at__isnull=False).count()
     return render(request, 'operations/dashboard.html', {
-        'section': 'dashboard', 'revenue': Payment.objects.aggregate(total=Sum('amount'))['total'] or 0,
+        'section': 'dashboard', 'revenue': earned.aggregate(total=Sum('amount'))['total'] or 0,
         'sold': tickets, 'checked': checked, 'attendance': round(checked / tickets * 100) if tickets else 0,
         'active_holds': Booking.objects.filter(status='held', expires_at__gt=timezone.now()).count(),
         'event_count': Event.objects.filter(published=True, starts_at__gt=timezone.now()).count(),
@@ -142,13 +144,16 @@ def gate(request):
         raw = request.POST.get('ticket', '').strip().rstrip('/').split('/')[-1]
         try:
             ticket_id = uuid.UUID(raw)
-            ticket = get_object_or_404(Ticket, pk=ticket_id)
-            return redirect('scan', pk=ticket.pk)
         except (ValueError, AttributeError):
             messages.error(request, 'QR havola yoki chipta UUID kiriting.')
+        else:
+            if Ticket.objects.filter(pk=ticket_id).exists():
+                return redirect('scan', pk=ticket_id)
+            messages.error(request, 'Bunday chipta topilmadi.')
+    valid = Ticket.objects.filter(item__booking__status=Booking.Status.PAID)
     return render(request, 'operations/gate.html', {'section': 'gate',
-        'checked': Ticket.objects.filter(checked_in_at__isnull=False).count(), 'total': Ticket.objects.count(),
-        'recent': Ticket.objects.filter(checked_in_at__isnull=False).select_related('item__seat', 'item__booking__event').order_by('-checked_in_at')[:10]})
+        'checked': valid.filter(checked_in_at__isnull=False).count(), 'total': valid.count(),
+        'recent': valid.filter(checked_in_at__isnull=False).select_related('item__seat', 'item__booking__event').order_by('-checked_in_at')[:10]})
 
 
 @operator_required('booking.view_auditlog')

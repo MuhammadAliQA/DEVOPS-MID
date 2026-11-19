@@ -7,8 +7,8 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'local-development-only-not-for-production'
 PAYMENT_SECRET = os.getenv('PAYMENT_SECRET', 'local-simulator-only')
 if not DEBUG and (len(SECRET_KEY) < 50 or len(PAYMENT_SECRET) < 32 or PAYMENT_SECRET == 'local-simulator-only'):
     raise ValueError('Production requires a strong SECRET_KEY and PAYMENT_SECRET')
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver').split(',')
-CSRF_TRUSTED_ORIGINS = [s for s in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if s]
+ALLOWED_HOSTS = [h.strip() for h in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver').split(',') if h.strip()]
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if o.strip()]
 INSTALLED_APPS = [
     'booking.admin_apps.TicketlyAdminConfig', 'django.contrib.auth', 'django.contrib.contenttypes',
     'django.contrib.sessions', 'django.contrib.messages', 'django.contrib.staticfiles',
@@ -55,9 +55,15 @@ USE_TZ = True
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static']
+# Pre-compressed (gzip/brotli) assets served by WhiteNoise. Deliberately not the
+# manifest storage: templates version assets with ?v= and tests render pages
+# without running collectstatic.
+STORAGES = {'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+            'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedStaticFilesStorage'}}
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'uploads'
 MAX_ACTIVE_HOLDS = 3
+REFUND_WINDOW_HOURS = int(os.getenv('REFUND_WINDOW_HOURS', '24'))
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 LOGIN_URL = '/accounts/login/'
 LOGIN_REDIRECT_URL = '/'
@@ -68,8 +74,10 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework_simplejwt.authentication.JWTAuthentication',
                                        'rest_framework.authentication.SessionAuthentication'],
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
-    'DEFAULT_THROTTLE_CLASSES': ['rest_framework.throttling.AnonRateThrottle'],
-    'DEFAULT_THROTTLE_RATES': {'anon': '60/min'},
+    # Anonymous callers are limited per IP; signed-in callers per account, so a
+    # scripted customer cannot hammer booking/payment endpoints unthrottled.
+    'DEFAULT_THROTTLE_CLASSES': ['rest_framework.throttling.AnonRateThrottle', 'rest_framework.throttling.UserRateThrottle'],
+    'DEFAULT_THROTTLE_RATES': {'anon': '60/min', 'user': '600/min'},
 }
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SECURE = not DEBUG

@@ -1,7 +1,28 @@
 from django import forms
+from django.contrib.auth import get_user_model
+from django.contrib.auth.forms import UserCreationForm
 from django.utils import timezone
 from .models import Event
-from django.contrib.auth import get_user_model
+
+
+def _email_in_use(email, exclude_pk=None):
+    users = get_user_model().objects.filter(email__iexact=email)
+    return users.exclude(pk=exclude_pk).exists() if exclude_pk else users.exists()
+
+
+class RegisterForm(UserCreationForm):
+    """Sign-up form shared by the website and the API. Email stays optional, but a
+    given address can belong to one account only (case-insensitive)."""
+    email = forms.EmailField(required=False, max_length=254)
+
+    class Meta(UserCreationForm.Meta):
+        fields = ('username', 'email')
+
+    def clean_email(self):
+        email = self.cleaned_data.get('email', '').strip().lower()
+        if email and _email_in_use(email):
+            raise forms.ValidationError('Bu email allaqachon ro‘yxatdan o‘tgan.', code='email_taken')
+        return email
 
 
 class DiscoveryForm(forms.Form):
@@ -66,6 +87,12 @@ class ProfileForm(forms.ModelForm):
     class Meta:
         model = get_user_model()
         fields = ['first_name', 'last_name', 'email']
+
+    def clean_email(self):
+        email = self.cleaned_data.get('email', '').strip().lower()
+        if email and _email_in_use(email, self.instance.pk):
+            raise forms.ValidationError('Bu email boshqa hisobda ishlatilgan.', code='email_taken')
+        return email
 
 
 class SubscriptionForm(forms.Form):

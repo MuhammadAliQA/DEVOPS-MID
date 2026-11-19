@@ -24,7 +24,8 @@ document.addEventListener('keydown', event => {
 document.addEventListener('click', event => { if (!event.target.closest('.header')) closeNavigation(); });
 window.matchMedia('(min-width: 1101px)').addEventListener('change', closeNavigation);
 document.querySelector('.lang-form select')?.addEventListener('change', function () { this.form.requestSubmit(); });
-document.querySelectorAll('img').forEach(img => img.addEventListener('error', () => {
+const onImageError = img => {
+  if (img.classList.contains('hero-bg')) { img.hidden = true; return; } // decorative full-bleed image: hide, never swap in the logo
   if (img.hasAttribute('data-directory-image')) {
     const parent = img.parentElement;
     parent.classList.add('portrait-placeholder');
@@ -34,7 +35,12 @@ document.querySelectorAll('img').forEach(img => img.addEventListener('error', ()
   if (!img.classList.contains('real-qr') && !img.dataset.fallback) {
     img.dataset.fallback = 'true'; img.src = '/static/figma-favicon.png'; img.classList.add('empty-image');
   }
-}));
+};
+document.querySelectorAll('img').forEach(img => {
+  img.addEventListener('error', () => onImageError(img));
+  // The deferred script can run after a fast failure: the error event is already gone.
+  if (img.complete && img.naturalWidth === 0 && img.getAttribute('src')) onImageError(img);
+});
 const seatForm = document.getElementById('seat-form');
 if (seatForm) {
   const inputs = [...seatForm.querySelectorAll('input[name=seats]')];
@@ -52,7 +58,7 @@ if (seatForm) {
     chosen.forEach(input => {
       const row = document.createElement('div'); row.className = 'selected-item';
       const label = document.createElement('span'); label.textContent = input.dataset.label;
-      const price = document.createElement('b'); price.textContent = Number(input.dataset.price).toLocaleString() + ' UZS';
+      const price = document.createElement('b'); price.textContent = new Intl.NumberFormat(document.documentElement.lang).format(Number(input.dataset.price)) + ' UZS';
       const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', input.dataset.label + ' ×');
       remove.onclick = () => { input.checked = false; render(); };
       row.append(label, price, remove); list.append(row);
@@ -70,32 +76,51 @@ if (seatForm) {
   document.getElementById('seat-budget')?.addEventListener('input', function () {
     inputs.forEach(input => input.parentElement.classList.toggle('over-budget', this.value !== '' && Number(input.dataset.price) > Number(this.value)));
   });
-  let stopped = false;
-  window.addEventListener('pagehide', () => { stopped = true; });
+  let stopped = false, failures = 0, timer;
+  window.addEventListener('pagehide', () => { stopped = true; clearTimeout(timer); });
+  const schedule = () => {
+    if (stopped) return;
+    // Back off while the API is failing and stay quiet in background tabs.
+    timer = setTimeout(poll, document.hidden ? 20000 : Math.min(5000 * 2 ** failures, 60000));
+  };
   const poll = async () => {
     if (stopped) return;
+    if (document.hidden) return schedule();
     try {
       const response = await fetch(seatForm.dataset.availability, {headers: {'Accept': 'application/json'}, signal: AbortSignal.timeout(8000)});
       if (!response.ok) throw Error('availability');
       const seats = await response.json();
+      if (failures) { failures = 0; if (notice.textContent === t('retrying')) notice.textContent = t('select_map'); }
+      let lost = false;
       for (const seat of seats) {
         const input = inputs.find(item => Number(item.value) === seat.id);
         if (!input) continue;
-        if (!seat.available && input.checked) { input.checked = false; notice.textContent = t('seat_taken'); }
+        if (!seat.available && input.checked) { input.checked = false; lost = true; notice.textContent = t('seat_taken'); }
         input.disabled = !seat.available;
         input.parentElement.classList.toggle('occupied', !seat.available);
+        input.parentElement.classList.toggle('available', seat.available);
+        if (lost && !seat.available) input.parentElement.classList.add('just-taken');
       }
       render();
-    } catch (_) { notice.textContent = t('retrying'); }
-    if (!stopped) setTimeout(poll, 5000);
+      if (lost) document.dispatchEvent(new CustomEvent('ticketly:seat-lost'));
+    } catch (_) { failures += 1; notice.textContent = t('retrying'); }
+    schedule();
   };
-  setTimeout(poll, 5000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !stopped) { clearTimeout(timer); poll(); } });
+  timer = setTimeout(poll, 5000);
 }
 document.querySelectorAll('[data-expires]').forEach(node => {
+  let interval;
   const update = () => {
     const seconds = Math.max(0, Math.ceil((Date.parse(node.dataset.expires) - Date.now()) / 1000));
     node.textContent = seconds ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}` : t('expired');
-    if (!seconds) document.querySelectorAll('.checkout-layout button').forEach(button => { button.disabled = true; });
+    node.classList.toggle('is-urgent', seconds > 0 && seconds <= 60);
+    if (seconds > 0 && seconds <= 60 && !node.dataset.warned) { node.dataset.warned = '1'; document.dispatchEvent(new CustomEvent('ticketly:expiring', {detail: node})); }
+    if (!seconds) {
+      document.querySelectorAll('.checkout-layout button').forEach(button => { button.disabled = true; });
+      node.classList.add('is-expired'); clearInterval(interval);
+      document.dispatchEvent(new CustomEvent('ticketly:expired', {detail: node}));
+    }
   };
-  update(); setInterval(update, 1000);
+  update(); interval = setInterval(update, 1000);
 });

@@ -12,7 +12,7 @@ COPY = {'discover': ('Kashf etish', 'Открыть', 'Discover'),
  'register': ('Hisob yaratish', 'Создать аккаунт', 'Create account'),
  'menu': ('Menyu', 'Меню', 'Menu'),
  'search': ('Qidirish', 'Поиск', 'Search'),
- 'search_hint': ('Tadbir, san’atkor yoki joyni izlang’',
+ 'search_hint': ('Tadbir, san’atkor yoki joyni izlang',
                  'Событие, артист или площадка',
                  'Search artists, events, venues…'),
  'language': ('Til', 'Язык', 'Language'),
@@ -77,9 +77,9 @@ COPY = {'discover': ('Kashf etish', 'Открыть', 'Discover'),
                      '10-minute reservation · QR ticket'),
  'save_event': ('Tadbirni saqlash', 'Сохранить событие', 'Save event'),
  'saved_event': ('Sevimlilarga saqlandi', 'В избранном', 'Saved to favorites'),
- 'refund_yes': ('Qaytarish uchun tadbirdan oldin tashkilotchiga murojaat qiling. Avtomatik qaytarish mavjud emas.',
-                'Для возврата обратитесь к организатору до события. Автоматический возврат недоступен.',
-                'Contact the organizer before the event for refunds. Automated refunds are not available.'),
+ 'refund_yes': ('Tadbirdan kamida 24 soat oldin Chiptalarim bo‘limidan pulni qaytarishingiz mumkin.',
+                'Вернуть деньги можно в разделе «Мои билеты» не позднее чем за 24 часа до события.',
+                'You can request a refund from My tickets up to 24 hours before the event.'),
  'refund_no': ('Ushbu tadbir chiptalari qaytarilmaydi.',
                'Билеты на это событие невозвратные.',
                'Tickets for this event are non-refundable.'),
@@ -142,7 +142,7 @@ COPY = {'discover': ('Kashf etish', 'Открыть', 'Discover'),
  'cvv': ('Demo xavfsizlik kodi', 'Демо-код безопасности', 'Demo security code'),
  'pay': ('To’lovni tasdiqlash', 'Подтвердить оплату', 'Confirm payment'),
  'decline': ('Rad etishni sinash', 'Проверить отказ', 'Test declined payment'),
- 'processing': ('To’lov tekshirilmoqda’', 'Проверяем платёж…', 'Processing payment…'),
+ 'processing': ('To’lov tekshirilmoqda…', 'Проверяем платёж…', 'Processing payment…'),
  'cancel': ('Bronni bekor qilish', 'Отменить бронь', 'Cancel reservation'),
  'expired': ('Bron muddati tugadi', 'Срок брони истёк', 'Reservation expired'),
  'rebook': ('Qayta joy tanlash', 'Выбрать места заново', 'Choose seats again'),
@@ -281,15 +281,15 @@ COPY = {'discover': ('Kashf etish', 'Открыть', 'Discover'),
  'terms_text': ('Bu o‘quv loyihasi: tadbirlar va to‘lovlar demo rejimida. O‘rindiq 10 daqiqaga band qilinadi; '
                 'muddat tugasa yoki bron bekor qilinsa, joy qayta sotuvga chiqadi. Bitta bron uchun 8 tagacha '
                 'o‘rindiq, bitta hisob uchun 3 ta faol bron mumkin. Narxlar UZSda, xizmat haqi 0 UZS. To‘langan '
-                'demo chiptalarni avtomatik qaytarish funksiyasi mavjud emas.',
+                'demo chiptalarni tadbirdan 24 soat oldingacha Chiptalarim bo‘limidan qaytarish mumkin (agar tadbir qaytarishga ruxsat bersa).',
                 'Это учебный проект: события и платежи работают в демо-режиме. Бронь действует 10 минут; после '
                 'истечения срока или отмены место освобождается. До 8 мест в одной брони и до 3 активных броней '
-                'на аккаунт. Цены в UZS, сервисный сбор — 0 UZS. Автоматический возврат оплаченных демо-билетов '
-                'недоступен.',
+                'на аккаунт. Цены в UZS, сервисный сбор — 0 UZS. Оплаченные демо-билеты можно вернуть '
+                'в разделе «Мои билеты» за 24 часа до события, если событие это разрешает.',
                 'This is an educational project with demo events and payments. Seats are held for 10 minutes and '
                 'released after expiry or cancellation. A booking allows up to 8 seats; an account can have 3 '
-                'active holds. Prices are in UZS with a zero service fee. Automated refunds for paid demo tickets '
-                'are unavailable.')}
+                'active holds. Prices are in UZS with a zero service fee. Paid demo tickets can be refunded from '
+                'My tickets up to 24 hours before the event, if the event allows it.')}
 
 
 COPY['step_payment'] = ('To‘lov', 'Оплата', 'Payment')
@@ -307,6 +307,35 @@ COPY.update({
         'При следующем входе используйте новый пароль. В других браузерных сессиях потребуется войти заново.',
         'Use your new password next time. Other browser sessions will require you to sign in again.'),
     'back_to_profile': ('Profilga qaytish', 'Вернуться в профиль', 'Back to profile'),
+})
+
+COPY.update({
+    'invalid_selection': ('1 tadan 8 tagacha turli o’rindiq tanlang.', 'Выберите от 1 до 8 разных мест.', 'Choose 1 to 8 different seats.'),
+    'booking_closed': ('Ushbu tadbir uchun bron yopilgan.', 'Бронирование на это событие закрыто.', 'Booking is closed for this event.'),
+    'seat_unavailable': ('Tanlangan joy band bo’ldi. Boshqa joy tanlang.', 'Выбранное место уже занято. Выберите другое.', 'That seat was just taken. Please pick another.'),
+    'ticket_invalid': ('Chipta haqiqiy emas yoki bekor qilingan.', 'Билет недействителен или аннулирован.', 'This ticket is not valid or was cancelled.'),
+    'ticket_used': ('Bu chipta avval ishlatilgan.', 'Этот билет уже использован.', 'This ticket was already used.'),
+    'refund': ('Pulni qaytarish', 'Вернуть деньги', 'Request refund'),
+    'refund_confirm': ('Bronni qaytarasizmi? Joylar bo’shatiladi va chiptalar bekor bo’ladi.', 'Вернуть бронь? Места освободятся, билеты будут аннулированы.', 'Refund this booking? Seats are released and tickets are cancelled.'),
+    'refund_done': ('To’lov qaytarildi. Chiptalar bekor qilindi.', 'Платёж возвращён. Билеты аннулированы.', 'Payment refunded. Tickets were cancelled.'),
+    'refund_not_allowed': ('Bu bron uchun to’lovni qaytarib bo’lmaydi.', 'Для этой брони возврат невозможен.', 'This booking cannot be refunded.'),
+    'refund_window_closed': ('Qaytarish muddati o’tgan: tadbirdan kamida 24 soat oldin so’rang.', 'Срок возврата истёк: запросите минимум за 24 часа до события.', 'The refund window has closed: request at least 24 hours before the event.'),
+    'status_refunded': ('Qaytarilgan', 'Возвращено', 'Refunded'),
+    'confirm_yes': ('Ha, tasdiqlayman', 'Да, подтверждаю', 'Yes, confirm'),
+    'confirm_no': ('Yo’q, ortga', 'Нет, назад', 'No, go back'),
+    'confirm_title': ('Tasdiqlang', 'Подтвердите', 'Please confirm'),
+    'cancel_confirm': ('Bronni bekor qilasizmi? Tanlangan joylar bo’shatiladi.', 'Отменить бронь? Выбранные места освободятся.', 'Cancel this booking? The selected seats will be released.'),
+    'skip_to_content': ('Asosiy kontentga o’tish', 'Перейти к содержимому', 'Skip to content'),
+    'no_price': ('Narx yo’q', 'Цена не указана', 'No price yet'),
+    'saved_toast': ('Saqlandi', 'Сохранено', 'Saved'),
+    'removed_toast': ('Saralangandan olib tashlandi', 'Удалено из избранного', 'Removed from favorites'),
+    'dismiss': ('Yopish', 'Закрыть', 'Dismiss'),
+    'time_running_out': ('Vaqt tugayapti!', 'Время истекает!', 'Time is running out!'),
+    'page_not_found': ('Sahifa topilmadi', 'Страница не найдена', 'Page not found'),
+    'page_not_found_text': ('Havola eskirgan yoki sahifa siz uchun mavjud emas.', 'Ссылка устарела или страница недоступна.', 'The link is outdated or the page is not available to you.'),
+    'forbidden': ('Ruxsat yo’q', 'Доступ запрещён', 'Access denied'),
+    'forbidden_text': ('Hisobingiz ushbu bo’limdan foydalanish huquqiga ega emas.', 'У вашей учётной записи нет доступа к этому разделу.', 'Your account does not have access to this section.'),
+    'back_home': ('Bosh sahifaga qaytish', 'На главную', 'Back to home'),
 })
 
 

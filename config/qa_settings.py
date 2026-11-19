@@ -17,4 +17,4 @@ AUTH_RATE_LIMIT = 10000
 CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
 if importlib.util.find_spec('whitenoise') is None:
     MIDDLEWARE = [item for item in MIDDLEWARE if not item.startswith('whitenoise.')]
-REST_FRAMEWORK = {**REST_FRAMEWORK, 'DEFAULT_THROTTLE_RATES': {'anon': '10000/min'}}
+REST_FRAMEWORK = {**REST_FRAMEWORK, 'DEFAULT_THROTTLE_RATES': {**REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'], 'anon': '10000/min', 'user': '10000/min'}}
