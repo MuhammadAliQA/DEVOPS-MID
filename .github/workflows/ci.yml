@@ -48,6 +48,7 @@ jobs:
       DB_PORT: "5432"
       PAYMENT_SECRET: ci-simulator-secret
       REDIS_URL: ''
+      CELERY_RESULT_BACKEND: "cache+memory://"
 
     steps:
       - name: Checkout source
