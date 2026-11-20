@@ -72,7 +72,8 @@ class TicketFlowJourneys(unittest.TestCase):
 
     def login(self, user=None):
         self.context.clear_cookies()
-        self.page.goto('/accounts/login/')
+        self.page.goto('/accounts/login/', wait_until='domcontentloaded', timeout=15000)
+        expect(self.page.locator('#id_username')).to_be_visible(timeout=10000)
         self.page.locator('#id_username').fill((user or self.user).username)
         self.page.locator('#id_password').fill(self.password)
         self.page.locator('.auth-card button').click()
@@ -196,6 +197,7 @@ class TicketFlowJourneys(unittest.TestCase):
         self.assertEqual(self.db(lambda: list(PaymentAttempt.objects.filter(booking_id=booking_id).order_by('created_at').values_list('status', flat=True))), ['failed', 'approved'])
 
     def test_cancel_releases_seat(self):
+        self.page.emulate_media(reduced_motion='reduce')
         self.login()
         booking_id = self.reserve_ui()
         self.page.get_by_role('button', name='Bronni bekor qilish').click()

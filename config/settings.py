@@ -80,8 +80,13 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {'anon': '60/min', 'user': '600/min'},
 }
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = os.getenv(
+    'SESSION_COOKIE_SECURE', str(not DEBUG)
+).lower() in ('1', 'true', 'yes', 'on')
+
+CSRF_COOKIE_SECURE = os.getenv(
+    'CSRF_COOKIE_SECURE', str(not DEBUG)
+).lower() in ('1', 'true', 'yes', 'on')
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', '0') == '1'
 TRUST_PROXY_HEADERS = os.getenv('TRUST_PROXY_HEADERS', '0') == '1'
@@ -104,3 +109,36 @@ LOGGING = {'version': 1, 'disable_existing_loggers': False,
            'formatters': {'json': {'()': 'config.middleware.JsonFormatter'}},
            'handlers': {'console': {'class': 'logging.StreamHandler', 'formatter': 'json'}},
            'root': {'handlers': ['console'], 'level': 'INFO'}}
+
+
+# ==========================================
+# CELERY CONFIGURATION
+# ==========================================
+
+CELERY_BROKER_URL = os.getenv(
+    "CELERY_BROKER_URL",
+    os.getenv("REDIS_URL", "redis://localhost:6379/0").rsplit("/", 1)[0] + "/1"
+)
+
+CELERY_RESULT_BACKEND = os.getenv(
+    "CELERY_RESULT_BACKEND",
+    os.getenv("REDIS_URL", "redis://localhost:6379/0").rsplit("/", 1)[0] + "/2"
+)
+
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_ENABLE_UTC = True
+
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 120
+CELERY_TASK_SOFT_TIME_LIMIT = 90
+
+CELERY_BEAT_SCHEDULE = {
+    "expire-bookings-every-30-seconds": {
+        "task": "booking.expire_bookings",
+        "schedule": 30.0,
+    },
+}

@@ -9,10 +9,14 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 COPY requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --create-home app
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir 'playwright>=1.51,<2' \
+    && useradd --uid 10001 --create-home app
 COPY --chown=app:app . .
 COPY --from=frontend --chown=app:app /build/static/vendor ./static/vendor
-RUN python manage.py collectstatic --noinput
+RUN DB_PASSWORD=build-placeholder SECRET_KEY=build-placeholder \
+    PAYMENT_SECRET=build-placeholder \
+    python manage.py collectstatic --noinput
 RUN mkdir -p /app/uploads /app/.tmp && chown -R app:app /app/uploads /app/.tmp
 USER app
 EXPOSE 8000

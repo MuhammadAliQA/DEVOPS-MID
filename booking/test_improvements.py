@@ -2,7 +2,8 @@
 import uuid
 from datetime import timedelta
 from unittest.mock import patch
-
+from .models import AuditLog, Booking, Event, Seat, Ticket
+from .tasks import expire_bookings_task
 from django.contrib.auth.models import Permission, User
 from django.db import connection
 from django.test import Client, TestCase
@@ -41,6 +42,46 @@ class CheapExpiryTests(TestCase):
             self.assertEqual(expire_event(event.pk), 0)
         self.assertEqual(len(queries), 1)
         self.assertTrue(queries[0]['sql'].lstrip().upper().startswith('SELECT'))
+
+    def test_celery_task_expires_booking_and_is_idempotent(self):
+        user = User.objects.create_user('celery-expiry-user')
+        event, seats = make_event()
+
+        booking = reserve(user, event.pk, [seats[0].pk])
+
+        Booking.objects.filter(pk=booking.pk).update(
+            expires_at=timezone.now() - timedelta(seconds=1)
+        )
+
+        with patch("booking.tasks.close_old_connections"):
+            result = expire_bookings_task.apply(throw=True).get()
+
+        self.assertEqual(result['expired_count'], 1)
+
+        booking.refresh_from_db()
+        seats[0].refresh_from_db()
+
+        self.assertEqual(booking.status, Booking.Status.EXPIRED)
+        self.assertIsNone(seats[0].reservation_id)
+
+        self.assertTrue(
+            AuditLog.objects.filter(
+                action='booking.expired',
+                target=str(booking.pk),
+            ).exists()
+        )
+
+        with patch("booking.tasks.close_old_connections"):
+            second_result = expire_bookings_task.apply(throw=True).get()
+        self.assertEqual(second_result['expired_count'], 0)
+
+        self.assertEqual(
+            AuditLog.objects.filter(
+                action='booking.expired',
+                target=str(booking.pk),
+            ).count(),
+            1,
+        )
 
     def test_stale_hold_is_released(self):
         user = User.objects.create_user('u', password=PASSWORD)

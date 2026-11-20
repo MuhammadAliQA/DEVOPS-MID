@@ -1,0 +1,417 @@
+"""Real browser acceptance checks. No mocked payment, fake UI, or shared user DB."""
+from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
+import io
+import os
+import re
+import unittest
+import uuid
+from pathlib import Path
+
+from django.contrib.auth.models import Permission, User
+from django.db import close_old_connections
+from django.utils import timezone
+from playwright.sync_api import expect
+from PIL import Image
+from booking.models import AuditLog, Booking, Event, PaymentAttempt, Seat, Ticket
+from booking.services import expire_event, pay, reserve
+
+
+class TicketFlowJourneys(unittest.TestCase):
+    browser = None
+    output = None
+    base_url = 'http://127.0.0.1:8990'
+    password = 'Isolated-QA-only!92847'
+
+    def db(self, function):
+        # Keep ORM work outside Playwright's event-loop thread.
+        def execute():
+            close_old_connections()
+            try:
+                return function()
+            finally:
+                close_old_connections()
+        return self.executor.submit(execute).result(timeout=20)
+
+    def setUp(self):
+        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.suffix = uuid.uuid4().hex[:9]
+        self.case_dir = self.output / self._testMethodName
+        self.case_dir.mkdir()
+        self.console_errors = []
+        self.server_errors = []
+        video = {} if os.environ.get('QA_NO_VIDEO') else {'record_video_dir': str(self.case_dir / 'video')}
+        self.context = self.browser.new_context(base_url=self.base_url, locale='uz-UZ', viewport={'width': 1440, 'height': 1000}, **video)
+        self.context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        self.page = self.context.new_page()
+        self.page.on('pageerror', lambda error: self.console_errors.append(str(error)))
+        self.page.on('response', lambda response: self.server_errors.append(f'{response.status} {response.url}') if response.status >= 500 else None)
+        self.user, self.admin, self.event, self.seat_id = self.db(self.seed)
+        self.page.set_default_timeout(8000)
+
+    def seed(self):
+        user = User.objects.create_user('customer-' + self.suffix, password=self.password)
+        admin = User.objects.create_superuser('admin-' + self.suffix, password=self.password)
+        event = Event.objects.create(title='QA Live ' + self.suffix, category='music', venue='QA Venue',
+                                      description='A real browser-test event in an isolated database.',
+                                      starts_at=timezone.now() + timedelta(days=5), published=True)
+        seats = [Seat(event=event, sector=sector, row=row, number=number, price=100000 if sector == 'A' else 200000)
+                 for sector in ['A', 'VIP'] for row in ['A', 'B'] for number in range(1, 9)]
+        Seat.objects.bulk_create(seats)
+        return user, admin, event, event.seats.first().pk
+
+    def tearDown(self):
+        try:
+            self.page.screenshot(path=str(self.case_dir / 'final.png'), full_page=True)
+            self.context.tracing.stop(path=str(self.case_dir / 'trace.zip'))
+        finally:
+            self.context.close()
+            self.executor.shutdown(wait=True)
+        self.assertEqual(self.console_errors, [], 'Browser JavaScript errors')
+        self.assertEqual(self.server_errors, [], 'HTTP 5xx responses')
+
+    def login(self, user=None):
+        self.context.clear_cookies()
+        self.page.goto('/accounts/login/')
+        self.page.locator('#id_username').fill((user or self.user).username)
+        self.page.locator('#id_password').fill(self.password)
+        self.page.locator('.auth-card button').click()
+        expect(self.page).to_have_url(self.base_url + '/')
+
+    def test_password_change_validation_and_mobile_layout(self):
+        self.login()
+        self.page.goto('/profile/')
+        self.page.locator('a[href="/accounts/password/change/"]').click()
+        new_password = 'Changed-QA-only!75291'
+        self.page.locator('#id_old_password').fill('incorrect-password')
+        self.page.locator('#id_new_password1').fill(new_password)
+        self.page.locator('#id_new_password2').fill(new_password)
+        self.page.locator('.auth-card button[type=submit]').click()
+        expect(self.page.locator('.errorlist')).not_to_have_count(0)
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        self.assertTrue(self.page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1'))
+        self.page.locator('#id_old_password').fill(self.password)
+        self.page.locator('#id_new_password1').fill(new_password)
+        self.page.locator('#id_new_password2').fill(new_password)
+        self.page.locator('.auth-card button[type=submit]').click()
+        expect(self.page).to_have_url(self.base_url + '/accounts/password/changed/')
+        self.page.locator('.auth-card a').click()
+        expect(self.page).to_have_url(self.base_url + '/profile/')
+        self.assertTrue(self.db(lambda: User.objects.get(pk=self.user.pk).check_password(new_password)))
+
+    def reserve_ui(self):
+        self.page.goto(f'/events/{self.event.pk}/seats/')
+        self.page.locator('label.seat:has(input:not([disabled]))').first.click()
+        expect(self.page.locator('#selection-heading')).to_contain_text('1')
+        self.page.locator('#reserve-button').click()
+        self.page.wait_for_url(re.compile(r'/bookings/[a-f0-9-]+/$'))
+        booking_id = self.page.url.rstrip('/').split('/')[-1]
+        self.page.locator('#id_contact_email').fill('qa@example.com')
+        self.page.locator('.checkout-layout button.primary').click()
+        self.page.wait_for_url(re.compile(r'/payment/$'))
+        return booking_id
+
+    def paid_fixture(self):
+        booking = reserve(self.user, self.event.pk, [self.seat_id])
+        pay(self.user, booking.pk)
+        return booking.pk, Ticket.objects.get(item__booking=booking).pk
+
+    def token(self):
+        response = self.context.request.post('/api/token/', data={'username': self.user.username, 'password': self.password})
+        self.assertEqual(response.status, 200)
+        return {'Authorization': 'Bearer ' + response.json()['access']}
+
+    def test_registration_validation_and_login(self):
+        self.page.goto('/accounts/register/')
+        self.page.locator('#id_username').fill('new-' + self.suffix)
+        self.page.locator('#id_password1').fill('short')
+        self.page.locator('#id_password2').fill('different')
+        self.page.locator('.auth-card button').click()
+        expect(self.page.locator('.errorlist')).not_to_have_count(0)
+        self.page.locator('#id_password1').fill(self.password)
+        self.page.locator('#id_password2').fill(self.password)
+        self.page.locator('.auth-card button').click()
+        expect(self.page).to_have_url(self.base_url + '/')
+        self.page.goto('/profile/')
+        expect(self.page.get_by_role('button', name='Chiqish')).to_be_visible()
+
+    def test_discovery_filters_and_empty_state(self):
+        self.page.goto('/')
+        self.page.locator('input[name=q]').fill(self.suffix)
+        self.page.get_by_role('button', name='Qidirish', exact=True).click()
+        expect(self.page.locator('.event-card')).to_have_count(1)
+        self.page.locator('input[name=max_price]').fill('1')
+        self.page.get_by_role('button', name='Qidirish', exact=True).click()
+        expect(self.page.locator('.empty')).to_contain_text('Tadbir topilmadi')
+        self.page.locator('.empty a').click()
+        expect(self.page.locator('.event-card')).not_to_have_count(0)
+
+    def test_favorites_add_and_remove(self):
+        self.login()
+        self.page.goto('/?q=' + self.suffix)
+        self.page.locator('.heart').click()
+        expect(self.page.locator('.heart')).to_have_class(re.compile('liked'))  # saved in place via fetch, no reload
+        self.page.goto('/?favorites=1')
+        expect(self.page.locator('.event-card')).to_have_count(1)
+        expect(self.page.locator('.heart')).to_have_class(re.compile('liked'))
+        self.page.locator('.heart').click()
+        expect(self.page.locator('.event-card')).to_have_count(0)  # card animates out and is removed
+        self.page.goto('/?favorites=1')
+        expect(self.page.locator('.event-card')).to_have_count(0)
+
+    def test_sectors_budget_selection_limit_and_summary(self):
+        self.login()
+        self.page.goto(f'/events/{self.event.pk}/seats/')
+        self.page.locator('#sector-filter').select_option('VIP')
+        expect(self.page.locator('[data-sector=VIP]')).to_be_visible()
+        expect(self.page.locator('[data-sector=A]')).to_be_hidden()
+        self.page.locator('#seat-budget').fill('100000')
+        expect(self.page.locator('[data-sector=VIP] .over-budget')).not_to_have_count(0)
+        seats = self.page.locator('[data-sector=VIP] label.seat')
+        for index in range(9):
+            seats.nth(index).click()
+        expect(self.page.locator('#selection-heading')).to_contain_text('8')
+        expect(self.page.locator('#selected-list>.selected-item')).to_have_count(8)
+        expect(self.page.locator('#seat-notice')).to_contain_text('8')
+        self.assertEqual(re.sub(r'\D', '', self.page.locator('#seat-total').inner_text()), '1600000')
+
+    def test_payment_and_ticket_journey(self):
+        self.login()
+        booking_id = self.reserve_ui()
+        self.page.get_by_role('button', name='Rad etishni sinash').click()
+        expect(self.page.locator('.message.error')).to_contain_text('rad etildi')
+        self.assertEqual(self.db(lambda: Booking.objects.get(pk=booking_id).status), 'held')
+        self.page.locator('button[value=approve]').click()
+        self.page.wait_for_url(re.compile(r'/success/$'))
+        self.page.goto('/tickets/')
+        qr = self.page.locator('.digital-ticket .real-qr')
+        expect(qr).to_be_visible()
+        expect(qr).to_have_js_property('complete', True)
+        self.assertGreater(qr.evaluate('(image) => image.naturalWidth'), 0)
+        with self.page.expect_download() as downloaded:
+            self.page.get_by_role('link', name=re.compile('Kalendarga')).click()
+        target = self.case_dir / 'event.ics'
+        downloaded.value.save_as(str(target))
+        self.assertIn('BEGIN:VCALENDAR', target.read_text())
+        self.assertEqual(self.db(lambda: list(PaymentAttempt.objects.filter(booking_id=booking_id).order_by('created_at').values_list('status', flat=True))), ['failed', 'approved'])
+
+    def test_cancel_releases_seat(self):
+        self.login()
+        booking_id = self.reserve_ui()
+        self.page.get_by_role('button', name='Bronni bekor qilish').click()
+        self.page.get_by_role('button', name='Ha, tasdiqlayman').click()  # animated confirm dialog
+        expect(self.page).to_have_url(self.base_url + '/tickets/')
+        self.assertEqual(self.db(lambda: Booking.objects.get(pk=booking_id).status), 'cancelled')
+        self.assertIsNone(self.db(lambda: Seat.objects.get(pk=self.seat_id).reservation_id))
+
+    def test_expiry_and_countdown(self):
+        self.login()
+        booking_id = self.reserve_ui()
+        self.db(lambda: Booking.objects.filter(pk=booking_id).update(expires_at=timezone.now() + timedelta(seconds=5)))
+        self.page.reload()
+        expect(self.page.locator('button[value=approve]')).to_be_disabled(timeout=10000)
+        self.db(lambda: expire_event(self.event.pk))
+        self.page.reload()
+        expect(self.page.locator('button[value=approve]')).to_have_count(0)
+        self.assertEqual(self.db(lambda: Booking.objects.get(pk=booking_id).status), 'expired')
+
+    def test_idempotency_and_repeated_payment(self):
+        headers = {**self.token(), 'Idempotency-Key': str(uuid.uuid4())}
+        payload = {'event': self.event.pk, 'seats': [self.seat_id]}
+        first = self.context.request.post('/api/bookings/', data=payload, headers=headers)
+        second = self.context.request.post('/api/bookings/', data=payload, headers=headers)
+        self.assertEqual(first.status, 201)
+        self.assertEqual(first.json()['id'], second.json()['id'])
+        booking_id = first.json()['id']
+        for _ in range(2):
+            response = self.context.request.post(f'/api/bookings/{booking_id}/pay/', data={'outcome': 'approve'}, headers=headers)
+            self.assertEqual(response.status, 200)
+        self.assertEqual(self.db(lambda: Ticket.objects.filter(item__booking_id=booking_id).count()), 1)
+
+    def test_stale_seat_conflict_is_explained(self):
+        self.login()
+        self.page.goto(f'/events/{self.event.pk}/seats/')
+        self.page.locator(f'label.seat:has(input[value="{self.seat_id}"])').click()
+        self.db(lambda: reserve(self.admin, self.event.pk, [self.seat_id]))
+        self.page.locator('#reserve-button').click()
+        expect(self.page.locator('.message.error')).to_contain_text('band')
+        self.assertEqual(self.db(lambda: Booking.objects.filter(user=self.user).count()), 0)
+
+    def test_live_availability_updates_selected_seat(self):
+        self.login()
+        self.page.goto(f'/events/{self.event.pk}/seats/')
+        seat = self.page.locator(f'input[value="{self.seat_id}"][name=seats]')
+        seat.locator('..').click()
+        self.db(lambda: reserve(self.admin, self.event.pk, [self.seat_id]))
+        expect(seat).to_be_disabled(timeout=20000)
+        expect(self.page.locator('#selection-heading')).to_have_text('Hali joy tanlanmagan')
+        expect(self.page.locator('#seat-notice')).to_contain_text('band')
+
+    def test_customer_cannot_open_operations_or_other_booking(self):
+        self.login()
+        response = self.page.goto('/operations/')
+        self.assertEqual(response.status, 403)
+        booking_id = self.db(lambda: reserve(self.admin, self.event.pk, [self.seat_id]).pk)
+        response = self.page.goto(f'/bookings/{booking_id}/')
+        self.assertEqual(response.status, 404)
+
+    def test_gate_role_and_duplicate_checkin(self):
+        _, ticket_id = self.db(self.paid_fixture)
+        def gate_user():
+            user = User.objects.create_user('gate-' + self.suffix, password=self.password, is_staff=True)
+            user.user_permissions.add(Permission.objects.get(content_type__app_label='booking', codename='check_in_ticket'))
+            return user
+        gate = self.db(gate_user)
+        self.login(gate)
+        self.page.goto('/operations/gate/')
+        expect(self.page.get_by_role('link', name='Umumiy ko‘rinish')).to_have_count(0)
+        self.page.locator('#ticket').fill(str(ticket_id))
+        self.page.get_by_role('button', name=re.compile('Chiptani topish')).click()
+        self.assertIsNone(self.db(lambda: Ticket.objects.get(pk=ticket_id).checked_in_at))
+        self.page.get_by_role('button', name='Kirishni tasdiqlash').click()
+        expect(self.page.locator('.auth-panel')).to_contain_text('Ishlatilgan')
+        self.page.reload()
+        expect(self.page.get_by_role('button', name='Kirishni tasdiqlash')).to_have_count(0)
+        response = self.page.goto('/operations/payments/')
+        self.assertEqual(response.status, 403)
+
+    def test_event_crud_poster_upload_and_delete(self):
+        self.login(self.admin)
+        self.page.goto('/operations/events/new/')
+        title = 'Created in browser ' + self.suffix
+        for field, value in {'title': title, 'venue': 'QA Upload Hall', 'description': 'Event created through a browser.',
+                             'starts_at': (timezone.now() + timedelta(days=8)).strftime('%Y-%m-%dT%H:%M')}.items():
+            self.page.locator('#id_' + field).fill(value)
+        self.page.locator('#id_category').select_option('music')
+        self.page.locator('#id_published').check()
+        image = self.case_dir / 'upload.png'
+        Image.new('RGB', (300, 400), '#315ce8').save(image)
+        self.page.locator('#id_poster').set_input_files(str(image))
+        self.page.get_by_role('button', name=re.compile('Tadbirni saqlash')).click()
+        expect(self.page).to_have_url(self.base_url + '/operations/events/')
+        event_id = self.db(lambda: Event.objects.get(title=title).pk)
+        self.page.goto(f'/events/{event_id}/')
+        expect(self.page.locator('.detail-visual img')).to_be_visible()
+        self.page.goto(f'/operations/events/{event_id}/')
+        self.page.locator('#id_title').fill(title + ' Updated')
+        self.page.get_by_role('button', name=re.compile('Tadbirni saqlash')).click()
+        self.page.goto(f'/operations/events/{event_id}/')
+        self.page.get_by_role('button', name='Broni yo‘q tadbirni o‘chirish').click()
+        expect(self.page).to_have_url(self.base_url + '/operations/events/')
+        self.assertFalse(self.db(lambda: Event.objects.filter(pk=event_id).exists()))
+
+    def test_booking_history_blocks_event_deletion(self):
+        self.db(lambda: reserve(self.user, self.event.pk, [self.seat_id]))
+        self.login(self.admin)
+        self.page.goto(f'/operations/events/{self.event.pk}/')
+        self.page.get_by_role('button', name='Broni yo‘q tadbirni o‘chirish').click()
+        expect(self.page.locator('.message.error')).to_contain_text('Bron tarixi')
+        self.assertTrue(self.db(lambda: Event.objects.filter(pk=self.event.pk).exists()))
+
+    def test_audit_attempts_and_csv_export(self):
+        self.db(self.paid_fixture)
+        self.login(self.admin)
+        self.page.goto('/operations/activity/?action=payment.approved')
+        expect(self.page.locator('tbody')).to_contain_text('payment.approved')
+        self.page.goto('/operations/payments/?status=approved')
+        expect(self.page.locator('tbody')).to_contain_text(self.user.username)
+        self.page.goto('/operations/bookings/?q=' + self.suffix)
+        with self.page.expect_download() as downloaded:
+            self.page.get_by_role('link', name='↓ CSV eksport').click()
+        csv_path = self.case_dir / 'bookings.csv'
+        downloaded.value.save_as(str(csv_path))
+        self.assertIn(self.event.title, csv_path.read_text(encoding='utf-8-sig'))
+
+    def test_responsive_routes_have_no_document_overflow(self):
+        self.login(self.admin)
+        routes = ['/', '/events/', '/artists/', '/venues/', '/profile/', f'/events/{self.event.pk}/seats/', f'/events/{self.event.pk}/', '/tickets/', '/operations/', '/operations/events/',
+                  '/operations/bookings/', '/operations/payments/', '/operations/activity/', '/operations/gate/']
+        for width in [1440, 768, 390]:
+            self.page.set_viewport_size({'width': width, 'height': 900})
+            for index, route in enumerate(routes):
+                with self.subTest(width=width, route=route):
+                    response = self.page.goto(route)
+                    self.assertEqual(response.status, 200)
+                    self.assertTrue(self.page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1'), f'Overflow at {route}, {width}px')
+                    self.page.screenshot(path=str(self.case_dir / f'{width}-{index}.png'), full_page=True)
+
+    def test_seat_keyboard_selection(self):
+        self.login()
+        self.page.goto(f'/events/{self.event.pk}/seats/')
+        seat = self.page.locator('input[name=seats]:not([disabled])').first
+        seat.focus()
+        self.page.keyboard.press('Space')
+        expect(seat).to_be_checked()
+        expect(self.page.locator('#selection-heading')).to_contain_text('1')
+
+    def test_language_switch_and_discount_checkout(self):
+        self.login()
+        self.page.locator('select[name=language]').select_option('ru')
+        expect(self.page.locator('html')).to_have_attribute('lang', 'ru')
+        self.page.reload()
+        expect(self.page.locator('html')).to_have_attribute('lang', 'ru')
+        self.page.locator('select[name=language]').select_option('en')
+        expect(self.page.locator('html')).to_have_attribute('lang', 'en')
+        self.page.goto(f'/events/{self.event.pk}/seats/')
+        self.page.locator('input[name=seats]:not([disabled])').first.check()
+        self.page.locator('#reserve-button').click()
+        self.page.locator('#id_contact_email').fill('qa@example.com')
+        self.page.locator('#id_promo_code').fill('TICKETLY10')
+        self.page.locator('.checkout-layout button.primary').click()
+        expect(self.page.locator('.order-total')).to_contain_text('90 000')
+        expect(self.page.locator('.costs .discount')).to_contain_text('10 000')
+
+    def test_header_navigation_mobile_menu_and_reduced_motion(self):
+        self.page.goto('/')
+        expect(self.page.locator('html')).to_have_attribute('data-motion-engine', 'animejs')
+        self.assertEqual(self.page.evaluate('typeof window.anime.createTimeline'), 'function')
+        self.page.locator('#navigation a[href="/artists/"]').click()
+        expect(self.page).to_have_url(self.base_url + '/artists/')
+        expect(self.page.locator('#navigation a[aria-current=page]')).to_have_attribute('href', '/artists/')
+        self.page.locator('.nav-help summary').click()
+        self.page.locator('.help-menu a[href="/privacy/"]').click()
+        expect(self.page.locator('.support-nav a[aria-current=page]')).to_have_attribute('href', '/privacy/')
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        menu = self.page.locator('.menu-button')
+        menu.click()
+        expect(menu).to_have_attribute('aria-expanded', 'true')
+        self.page.locator('#navigation a[href="/venues/"]').click()
+        expect(self.page).to_have_url(self.base_url + '/venues/')
+        menu.click()
+        self.page.keyboard.press('Escape')
+        expect(menu).to_have_attribute('aria-expanded', 'false')
+        expect(menu).to_be_focused()
+        self.page.emulate_media(reduced_motion='reduce')
+        self.page.goto('/')
+        self.assertEqual(self.page.locator('.hero-content').evaluate('(el) => getComputedStyle(el).animationName'), 'none')
+        self.assertEqual(self.page.locator('.hero h1').evaluate('(el) => getComputedStyle(el).opacity'), '1')
+
+    def test_django_control_admin_creation_and_responsive_shell(self):
+        self.login(self.admin)
+        self.page.goto('/admin/')
+        expect(self.page.locator('.control-metrics')).to_be_visible()
+        self.page.goto('/admin/booking/event/add/')
+        title = 'Control browser ' + self.suffix
+        for field, value in {'title': title, 'venue': 'Browser admin hall', 'description': 'Admin browser test',
+                             'starts_at': (timezone.now() + timedelta(days=6)).strftime('%Y-%m-%dT%H:%M'),
+                             'rows': '1', 'seats_per_row': '2'}.items():
+            self.page.locator('#id_' + field).fill(value)
+        self.page.locator('#id_category').select_option('music')
+        self.page.locator('input[name=_save]').first.click()
+        expect(self.page).to_have_url(self.base_url + '/admin/booking/event/')
+        self.assertEqual(self.db(lambda: Event.objects.get(title=title).seats.count()), 4)
+        for width in (1440, 1024, 1023, 768, 767, 390, 320):
+            self.page.set_viewport_size({'width': width, 'height': 900})
+            self.page.goto('/admin/')
+            self.page.screenshot(path=str(self.case_dir / f'control-{width}.png'), full_page=True)
+            layout = self.page.evaluate('''() => ({
+                viewport: innerWidth,
+                document: document.documentElement.scrollWidth,
+                overflowing: [...document.querySelectorAll('body *')].filter(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.right > innerWidth + 1;
+                }).slice(0, 15).map(el => ({tag: el.tagName, id: el.id,
+                    className: el.className, right: el.getBoundingClientRect().right}))
+            })''')
+            self.assertLessEqual(layout['document'], layout['viewport'] + 1,
+                                 f'Admin dashboard overflow at {width}px: {layout}')

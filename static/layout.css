@@ -1,6 +1,6 @@
 /* UFARM-3845: layout corrections on top of the original Figma stylesheet. */
 :root { --page-gap: clamp(20px, 3vw, 40px); }
-@view-transition { navigation: auto; }
+/* Native navigation transitions disabled for stable viewport changes. */
 .native-motion .hero-content, .native-motion .event-card, .native-motion .directory-card { animation: none; }
 body { overflow-wrap: break-word; }
 .nav-shell { gap: 24px; }

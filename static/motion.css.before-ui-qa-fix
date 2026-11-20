@@ -1,0 +1,88 @@
+/* TICKETLY motion layer. Every hidden state lives under .motion-ready, which is
+   added by a tiny inline script only when the visitor has not asked for reduced
+   motion. Without JS (or when motion.js fails) a CSS failsafe reveals everything. */
+:root { --ease-out: cubic-bezier(.16, 1, .3, 1); }
+
+.skip-link { position: fixed; left: 16px; top: -80px; z-index: 1000; background: #fff; color: #111; padding: 10px 16px; border-radius: 10px; font-weight: 700; transition: top .25s; }
+.skip-link:focus { top: 12px; }
+#main { outline: none; scroll-margin-top: 90px; }
+.error-page { margin: 60px 0; }
+
+/* Cross-document view transitions: no JS, no navigation delay, ignored when unsupported. */
+@media (prefers-reduced-motion: no-preference) {
+  @view-transition { navigation: auto; }
+  .header { view-transition-name: site-header; }
+  ::view-transition-old(root) { animation: vt-out .2s ease both; }
+  ::view-transition-new(root) { animation: vt-in .45s var(--ease-out) both; }
+  @keyframes vt-out { to { opacity: 0; transform: translateY(-6px); } }
+  @keyframes vt-in { from { opacity: 0; transform: translateY(14px); } }
+}
+
+.scroll-progress { position: fixed; inset: 0 0 auto 0; height: 3px; z-index: 300; transform-origin: 0 50%; transform: scaleX(0); background: linear-gradient(90deg, #8b5cf6, #c4a8ff, #38e1c6); pointer-events: none; }
+
+.header { transition: transform .45s var(--ease-out), background-color .3s, box-shadow .3s; }
+.header.is-scrolled { background: #0b0b0ff2; box-shadow: 0 12px 40px #0009; }
+.header.is-hidden { transform: translateY(-102%); }
+
+/* Reveal targets are hidden only while motion is allowed; failsafe after 3s. */
+.motion-ready :is(.section-title, .event-card, .directory-card, .venue-card, .form-card, .order-card, .digital-ticket,
+  .support-layout, .profile-hero, .profile-stats > div, .favorite-list > a, .category-row > a, .detail-facts > div,
+  .ticket-tiers > div, .booking-card, .about, .settings-card, .empty, .page-heading, .flow-header, .flow-steps,
+  .footer-grid > div, .success-ticket, .hero-meta, .hero-content > p, .hero-info, .hero-actions, .hero h1,
+  .selection-card, .seat-map-card, .kpi, .ops-panel, .upcoming-card, .ops-title):not(.is-revealed) {
+  opacity: 0; animation: reveal-failsafe .01s 3s forwards;
+}
+.motion-ready .seat-map .seat:not(.is-revealed) { opacity: 0; animation: reveal-failsafe .01s 3s forwards; }
+.motion-ready :is(.event-image img, .directory-image img, .venue-card img, .detail-visual img, .favorite-list img, .ticket-art img):not(.is-loaded) {
+  opacity: 0; animation: reveal-failsafe .01s 4s forwards;
+}
+.motion-ready :is(.event-card, .directory-card):not(.is-revealed) { animation-name: reveal-failsafe; }
+@keyframes reveal-failsafe { to { opacity: 1; } }
+.is-revealed, .is-loaded { opacity: 1; }
+img.is-loaded { transition: opacity .7s ease, transform .55s; }
+
+.hero-bg { animation: kenburns 26s ease-in-out infinite alternate; }
+@keyframes kenburns { from { scale: 1.02; } to { scale: 1.12; } }
+.hero-orbit > i { margin-left: -4px; }
+.hero::after { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: radial-gradient(520px circle at var(--mx, 70%) var(--my, 40%), #8b5cf62e, transparent 60%); }
+.hero h1 .word { display: inline-block; will-change: transform; }
+
+/* Tilt + spotlight on cards (pointer: fine only, set by JS). */
+.event-card[data-tilt] { --rx: 0deg; --ry: 0deg; --mx: 50%; --my: 50%; }
+.event-card[data-tilt]::before { content: ''; position: absolute; inset: 0; z-index: 2; border-radius: inherit; pointer-events: none; opacity: 0; transition: opacity .3s;
+  background: radial-gradient(360px circle at var(--mx) var(--my), #a98aff2e, transparent 60%); }
+.event-card[data-tilt]:hover::before { opacity: 1; }
+.event-card[data-tilt].is-tilting { transform: perspective(900px) translateY(-6px) rotateX(var(--rx)) rotateY(var(--ry)); transition: transform .12s linear, border-color .3s, box-shadow .3s; }
+
+.ripple { position: absolute; border-radius: 50%; background: #ffffff44; pointer-events: none; transform: scale(0); }
+
+.heart-burst { position: absolute; width: 6px; height: 6px; border-radius: 50%; pointer-events: none; z-index: 6; }
+.seat.just-taken { animation: seat-shake .5s; outline: 2px solid #ff6b6b88; }
+@keyframes seat-shake { 20%, 60% { translate: -3px 0; } 40%, 80% { translate: 3px 0; } }
+.seat-ring { position: absolute; inset: 0; border-radius: inherit; border: 2px solid #b79afa; pointer-events: none; }
+.selected-item { transform-origin: left center; }
+
+[data-expires].is-urgent { color: #ff8f8f; animation: urgent-pulse 1s ease-in-out infinite; }
+[data-expires].is-expired { color: #ff6b6b; }
+@keyframes urgent-pulse { 50% { opacity: .45; } }
+
+.message { position: relative; overflow: hidden; cursor: pointer; }
+.message .toast-bar { position: absolute; left: 0; bottom: 0; height: 2px; width: 100%; background: currentColor; opacity: .5; transform-origin: 0 50%; }
+
+dialog.confirm-dialog { border: 1px solid #3a3446; border-radius: 20px; background: linear-gradient(150deg, #1b1822, #111116); color: #fff; padding: 28px; width: min(420px, calc(100vw - 32px)); box-shadow: 0 40px 120px #000b; }
+dialog.confirm-dialog::backdrop { background: #05050acc; backdrop-filter: blur(6px); }
+.confirm-dialog h2 { margin: 0 0 10px; font-size: 20px; }
+.confirm-dialog p { margin: 0; color: #b9b2c6; line-height: 1.7; font-size: 14px; }
+.confirm-actions { display: flex; gap: 12px; margin-top: 24px; }
+.confirm-actions > * { flex: 1; min-height: 44px; cursor: pointer; }
+
+.confetti { position: fixed; inset: 0; z-index: 400; pointer-events: none; overflow: hidden; }
+.confetti i { position: absolute; left: 50%; top: 42%; width: 8px; height: 14px; border-radius: 2px; }
+
+.chart-bar { transform-origin: 50% 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-bg, [data-expires].is-urgent { animation: none; }
+  .scroll-progress { display: none; }
+}

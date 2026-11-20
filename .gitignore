@@ -31,3 +31,8 @@ deploy/.release.lock
 
 # Original design export is not required to build or run the application.
 design-reference/
+
+# Python virtual environments
+.venv/
+.venv-qa/
+

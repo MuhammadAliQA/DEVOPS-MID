@@ -1,86 +1,143 @@
 
+name: ticketflow
+
 x-app: &app
-  build: .
-  image: ticketflow:local
-  environment: &env
-    DEBUG: ${DEBUG:-1}
-    SECRET_KEY: ${SECRET_KEY:-local-development-only-change-before-deployment}
-    PAYMENT_SECRET: ${PAYMENT_SECRET:-local-simulator-only}
-    ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,192.168.56.101}
-    CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://localhost:18000,http://127.0.0.1:18000,http://192.168.56.101:18000}
-    DB_HOST: db
-    DB_NAME: ticketflow
-    DB_USER: ticketflow
-    DB_PASSWORD: ${DB_PASSWORD:?Copy .env.example to .env first}
-    PAYMENT_URL: http://payment:8001
-    REDIS_URL: redis://cache:6379/0
-  init: true
-  security_opt: ["no-new-privileges:true"]
-  cap_drop: [ALL]
-  logging:
-    driver: json-file
-    options:
-      max-size: "10m"
-      max-file: "3"
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - .env
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+    cache:
+      condition: service_healthy
 
 services:
-  cache:
-    image: redis:7.4-alpine
-    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
+
+  # ==========================================
+  # POSTGRESQL
+  # ==========================================
 
   db:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: ticketflow
-      POSTGRES_USER: ticketflow
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?Copy .env.example to .env first}
+      POSTGRES_DB: ${DB_NAME:-ticketflow}
+      POSTGRES_USER: ${DB_USER:-ticketflow}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ticketflow -d ticketflow"]
-      interval: 5s
-      timeout: 3s
-      retries: 15
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${DB_USER:-ticketflow} -d ${DB_NAME:-ticketflow}
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ==========================================
+  # REDIS
+  # ==========================================
+
+  cache:
+    image: redis:7.4-alpine
     restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ==========================================
+  # DATABASE MIGRATIONS
+  # ==========================================
 
   migrate:
     <<: *app
-    command: ["python", "manage.py", "bootstrap_platform"]
+    command: python manage.py migrate --noinput
+    restart: "no"
     depends_on:
       db:
         condition: service_healthy
+      cache:
+        condition: service_healthy
+
+  # ==========================================
+  # PAYMENT SIMULATOR
+  # ==========================================
 
   payment:
     <<: *app
-    environment:
-      DEBUG: ${DEBUG:-1}
-      PAYMENT_SECRET: ${PAYMENT_SECRET:-local-simulator-only}
-    command:
-      - gunicorn
-      - payment_service.wsgi:application
-      - --bind
-      - 0.0.0.0:8001
-      - --workers
-      - "2"
-      - --access-logfile
-      - "-"
-      - --error-logfile
-      - "-"
+    command: >
+      gunicorn payment_service.wsgi:application
+      --bind 0.0.0.0:8001
+      --workers 2
+      --access-logfile -
+      --error-logfile -
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live/', timeout=2)"]
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live/', timeout=2)"
       interval: 15s
       timeout: 3s
       retries: 3
-    restart: unless-stopped
+      start_period: 10s
+
+  # ==========================================
+  # CELERY WORKER
+  # ==========================================
+
+  celery-worker:
+    <<: *app
+    command: celery -A config worker --loglevel=INFO --concurrency=2
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # ==========================================
+  # CELERY BEAT SCHEDULER
+  # ==========================================
+
+  celery-beat:
+    <<: *app
+    command: celery -A config beat --loglevel=INFO --schedule=/app/.tmp/celerybeat-schedule
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # ==========================================
+  # MAIN WEB APPLICATION
+  # ==========================================
 
   web:
     <<: *app
+    command: >
+      gunicorn config.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers 3
+      --access-logfile -
+      --error-logfile -
     ports:
       - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-18000}:8000"
     volumes:
@@ -93,29 +150,22 @@ services:
       cache:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready/', timeout=2)"]
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready/', timeout=3)"
       interval: 15s
-      timeout: 3s
-      retries: 3
-    restart: unless-stopped
-
-  expiry-worker:
-    <<: *app
-    command: ["python", "manage.py", "expire_bookings", "--loop"]
-    environment:
-      <<: *env
-      EXPIRY_HEARTBEAT: /tmp/expiry.heartbeat
-    healthcheck:
-      test: ["CMD", "python", "-c", "import os,time; assert time.time()-os.path.getmtime('/tmp/expiry.heartbeat') < 60"]
-      interval: 20s
-      timeout: 3s
+      timeout: 5s
+      retries: 5
       start_period: 30s
-      retries: 3
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    restart: unless-stopped
+
+
+# ==========================================
+# PERSISTENT VOLUMES
+# ==========================================
 
 volumes:
   postgres_data:
+  redis_data:
   uploaded_posters:
